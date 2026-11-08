@@ -325,3 +325,15 @@ Facts from the eie-pro-linux README, checked on the user's unit:
 - README: Download and install section, status and limits updated.
 - Not verified: the Gatekeeper "Open Anyway" flow and the install on the M2 (next), Intel,
   the Uninstall button, MIDI with cables.
+
+## 2026-11-08 (night): compared with ewan-m/akai-eie-pro-mac; next: latency
+
+- Read github.com/ewan-m/akai-eie-pro-mac (GPL-2, started 2026-05-20, DriverKit dext +
+  activator app, USBDriverKit iso/bulk, 1 ms sync like ours). Needs Reduced Security +
+  `systemextensionsctl developer on` until Apple grants DriverKit entitlements. 48 kHz
+  tested, no MIDI, no sleep/stall recovery/fades found. Ahead of us on latency: per-rate
+  SetInputLatency/SetOutputLatency, selectable IO buffer size. GPL: borrow ideas, not code.
+- README: "See also" section crediting it.
+- **Next (user's choice, 2026-11-09): measure round-trip latency** in Ableton (output
+  looped into an input, check recorded alignment / Driver Error Compensation), then report
+  correct device/stream latency and safety offsets per rate if it's off.

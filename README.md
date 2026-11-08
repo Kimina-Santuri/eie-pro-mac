@@ -84,6 +84,14 @@ The USB protocol was worked out by the
 README's protocol notes made this possible. This code is a separate, from-scratch
 implementation.
 
+## See also
+
+[akai-eie-pro-mac](https://github.com/ewan-m/akai-eie-pro-mac) by ewan-m (GPL-2, started
+May 2026) is an earlier, independent driver for the same box, built as a DriverKit system
+extension. It handles latency reporting and buffer sizes carefully. Until it has Apple's
+DriverKit entitlements, installing it means lowering the Mac's security in Recovery mode;
+this project installs with a normal `.pkg` instead. The two share no code.
+
 ## Licence
 
 MIT. See [LICENSE](LICENSE). Not affiliated with or endorsed by Akai Professional or
