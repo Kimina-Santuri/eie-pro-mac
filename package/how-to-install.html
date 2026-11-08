@@ -1,0 +1,55 @@
+<html><head><meta charset="utf-8"><title>How to install EIE Pro for Mac</title></head>
+<body style="font-family: Helvetica; font-size: 13px;">
+<h1>How to install EIE Pro for Mac</h1>
+<p>This makes the Akai EIE Pro work on modern Macs. You need a Mac with macOS 14 (Sonoma) or newer, Apple Silicon (M1, M2, M3…) or Intel. It takes about 5 minutes.</p>
+
+<h2>1. Open the installer</h2>
+<p>Double-click <b>EIE Pro @VERSION@.pkg</b> (in the folder this note came in).</p>
+<p>macOS will probably say it <b>could not verify</b> the installer. That is normal for free software that isn't sold through Apple. Click <b>Done</b> (not "Move to Trash").</p>
+
+<h2>2. Allow it once</h2>
+<ol>
+<li>Open <b>System Settings</b> (Apple menu at the top left → System Settings).</li>
+<li>Click <b>Privacy &amp; Security</b> in the list on the left.</li>
+<li>Scroll down to <b>Security</b>. You'll see a line saying the EIE Pro installer was blocked. Click <b>Open Anyway</b>.</li>
+<li>Enter your Mac password if asked, then click <b>Open</b>.</li>
+</ol>
+
+<h2>3. Install</h2>
+<p>Click <b>Continue</b>, <b>Agree</b>, then <b>Install</b>, and enter your Mac password. Near the end your Mac's sound stops for a second: that is macOS loading the driver. Click <b>Close</b> when it's done.</p>
+<p>A small round <b>waveform icon</b> appears at the top right of the screen, in the menu bar. That is the EIE Pro app.</p>
+
+<h2>4. Plug in the EIE Pro</h2>
+<p>Connect the EIE Pro with its USB cable and switch it on. When the Mac sees it, the menu-bar icon fills in and its menu says <b>Firmware 1.04</b> (or similar).</p>
+
+<h2>5. Choose the EIE Pro</h2>
+<ul>
+<li><b>For all Mac sound:</b> System Settings → <b>Sound</b> → Output: <b>EIE Pro</b> (and Input: EIE Pro to record).</li>
+<li><b>Ableton Live:</b> Settings → <b>Audio</b> → Audio Input Device and Audio Output Device: <b>EIE Pro</b>.</li>
+<li><b>Other music apps:</b> pick <b>EIE Pro</b> in their audio settings.</li>
+</ul>
+<p>The first time an app records from the EIE Pro, macOS asks whether it may use the microphone. Click <b>Allow</b>, or the app will record silence.</p>
+
+<h2>The menu-bar app</h2>
+<ul>
+<li><b>Sample rate:</b> 44.1k, 48k, 88.2k or 96k.</li>
+<li><b>Meters:</b> the four inputs and four outputs.</li>
+<li><b>Keep the box awake:</b> stops the small tick when sound starts, and lets MIDI work when nothing is playing.</li>
+<li><b>MIDI:</b> the EIE Pro's MIDI sockets appear in music apps as <b>EIE Pro MIDI In</b> and <b>EIE Pro MIDI Out</b>.</li>
+<li><b>Open at login:</b> starts the app when you log in, so the MIDI ports are always there.</li>
+</ul>
+
+<h2>If something doesn't work</h2>
+<ul>
+<li><b>EIE Pro doesn't appear:</b> unplug the USB cable, wait 5 seconds, plug it back in. Check the box is switched on.</li>
+<li><b>No sound:</b> check System Settings → Sound → Output is EIE Pro, and the EIE Pro's volume knobs are up.</li>
+<li><b>The needle meters barely move:</b> the music is quiet. Turn up the song, the app or the faders.</li>
+<li><b>All Mac sound stops working:</b> restart the Mac.</li>
+</ul>
+
+<h2>To remove it</h2>
+<p>Click the waveform icon in the menu bar → <b>Uninstall…</b> → <b>Uninstall</b>, and enter your Mac password.</p>
+
+<p style="color:#666">EIE Pro for Mac @VERSION@ · free and open source (MIT) · github.com/Kimina-Santuri/eie-pro-mac<br>
+Made by Kimina / Santuri East Africa. Not made or supported by Akai Professional.</p>
+</body></html>

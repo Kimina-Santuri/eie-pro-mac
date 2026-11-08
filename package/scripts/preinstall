@@ -1,0 +1,4 @@
+#!/bin/sh
+# Quit the menu-bar app before replacing it.
+pkill -x EIEPro 2>/dev/null || true
+exit 0

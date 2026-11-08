@@ -2,6 +2,7 @@
 // meters, keep-awake, and the MIDI ports (which macOS only lets a user-session app make).
 
 import SwiftUI
+import ServiceManagement
 
 @main
 struct EIEProApp: App {
@@ -81,7 +82,12 @@ struct MenuView: View {
 
             Divider()
             Toggle("Open at login", isOn: $link.openAtLogin)
-            Button("Quit EIE Pro") { NSApplication.shared.terminate(nil) }
+            HStack {
+                Button("Quit EIE Pro") { NSApplication.shared.terminate(nil) }
+                Spacer()
+                Button("Uninstall…") { Uninstaller.run() }
+                    .foregroundStyle(.secondary)
+            }
         }
         .padding(14)
         .frame(width: 300)
@@ -110,6 +116,29 @@ struct MeterRow: View {
             Text(db <= -60 ? "–∞" : String(format: "%.0f", db))
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 .frame(width: 30, alignment: .trailing)
+        }
+    }
+}
+
+/// Removes the driver and this app after a confirmation, using the macOS password dialog.
+enum Uninstaller {
+    static func run() {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Uninstall EIE Pro?"
+        alert.informativeText = "This removes the EIE Pro driver and this app. Sound stops for a second while macOS restarts its audio. You will be asked for your Mac password."
+        alert.addButton(withTitle: "Uninstall")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        try? SMAppService.mainApp.unregister()
+        let cmd = "rm -rf /Library/Audio/Plug-Ins/HAL/EIEPro.driver '/Applications/EIE Pro.app'; pkgutil --forget co.ke.kimina.eie-pro >/dev/null 2>&1; killall coreaudiod"
+        var err: NSDictionary?
+        NSAppleScript(source: "do shell script \"\(cmd)\" with administrator privileges")?.executeAndReturnError(&err)
+        if err == nil {
+            let done = NSAlert()
+            done.messageText = "EIE Pro was removed."
+            done.runModal()
+            NSApplication.shared.terminate(nil)
         }
     }
 }

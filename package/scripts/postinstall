@@ -1,0 +1,11 @@
+#!/bin/sh
+# Load the new driver (restarts macOS's audio server: sound stops for a second), then
+# open the menu-bar app for the person who is logged in.
+chown -R root:wheel "/Library/Audio/Plug-Ins/HAL/EIEPro.driver"
+killall coreaudiod 2>/dev/null || true
+USER_NAME=$(stat -f %Su /dev/console)
+if [ -n "$USER_NAME" ] && [ "$USER_NAME" != "root" ]; then
+  sleep 2
+  launchctl asuser "$(id -u "$USER_NAME")" sudo -u "$USER_NAME" open "/Applications/EIE Pro.app" || true
+fi
+exit 0

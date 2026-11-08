@@ -9,8 +9,12 @@ execute_process(
   OUTPUT_STRIP_TRAILING_WHITESPACE
   COMMAND sh -c "cd \"${PROJECT_SOURCE_DIR}\" && git describe --tags --abbrev=0"
   )
-string(REGEX MATCH "v?([0-9.]+)" RESULT ${GIT_TAG})
+string(REGEX MATCH "v?([0-9.]+)" RESULT "${GIT_TAG}")
 set(GIT_TAG "${CMAKE_MATCH_1}")
+# eie-pro-mac: vendored inside another repo, so git tags are not libASPL's own
+if(LIBASPL_VERSION)
+  set(GIT_TAG "${LIBASPL_VERSION}")
+endif()
 if(NOT GIT_TAG STREQUAL "")
   message(STATUS "Detected version tag from git: ${GIT_TAG}")
 else()

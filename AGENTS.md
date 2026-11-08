@@ -276,3 +276,30 @@ Facts from the eie-pro-linux README, checked on the user's unit:
   the busy thread is still ~85% kernel time, so per-transfer count isn't the whole
   story. Next: profile the driver thread (needs root for `sample`), then CLOCK_PKTS 2.
 - Not verified: the user's ears on this build.
+
+## 2026-11-08 (evening): packaging for other Macs (zip + .pkg), app icon, uninstall button
+
+- User: step-2 build sounds great; app looks good; works in Ableton. Output needles:
+  can't be made more sensitive from software (analog meters on the box's own signal;
+  no known register); advice: send a hotter signal.
+- App icon: own drawing in the style of the SF Symbol `waveform.circle.fill` (SF Symbols
+  licence forbids symbols in app icons): `package/make-icon.swift` → `app/Support/AppIcon.icns`.
+- App: "Uninstall…" button (confirm, unregister login item, admin dialog removes driver +
+  app, `pkgutil --forget co.ke.kimina.eie-pro`, restarts coreaudiod). Not clicked yet.
+- `app/build.sh` now builds universal (arm64 + x86_64, one `--triple` build per arch:
+  Swift 6.4 writes both to `.build/out/Products/Release`, so each is copied out, then lipo).
+- `driver/CMakeLists.txt`: `LIBUSB_DIR` (default Homebrew) and `CMAKE_OSX_ARCHITECTURES`
+  passed to libASPL; `DRIVER_VERSION` cache var. Vendored libASPL patched: it read its
+  version from `git describe` (our repo's tags), now `-DLIBASPL_VERSION=3.1.2`.
+- `package/`: `build-libusb.sh` (downloads libusb 1.0.30 release tarball, static
+  universal, macOS 12+), `make-release.sh [version]` (driver + app universal → component
+  pkg with pre/postinstall, non-relocatable → productbuild with welcome + MIT licence,
+  macOS 14+ → zip with the pkg and "How to install.rtf" from `how-to-install.html`).
+  Test mode: `LIBUSB_DIR=/opt/homebrew ARCHS=arm64 package/make-release.sh 0.1.0-test`.
+- Verified (test mode): zip builds; pkg holds driver + app + icon + scripts; signatures
+  valid after expand; version set on the built app only. `com.apple.provenance` xattrs
+  (added to files made inside the Claude session, unremovable) end up as `._` entries and
+  "write: Permission denied" from pkgbuild; harmless, absent when built from Terminal.
+- NOT done: `build-libusb.sh` was blocked by Claude Code's auto mode (downloads + builds
+  outside code); waiting on the user. Then: real universal build, local install test of
+  the pkg, Gatekeeper "Open Anyway" flow on the M2, GitHub release v0.1.0.
