@@ -81,6 +81,8 @@ struct MenuView: View {
         }
         .padding(14)
         .frame(width: 300)
+        .onAppear { link.menuOpen = true }
+        .onDisappear { link.menuOpen = false }
     }
 }
 

@@ -214,3 +214,24 @@ Facts from the eie-pro-linux README, checked on the user's unit:
 - After the restart: check default output/input (switch back from the iPhone if needed,
   e.g. System Settings → Sound), check coreaudiod CPU and that the AirPlay message count is
   low, then install the driver ONCE, run the property test, open the app, push 4fe7d05+.
+
+## 2026-11-08 (evening): after the restart: driver reinstalled, properties verified, app CPU fixed
+
+- Restart cleared the coreaudiod AirPlay loop: 0 "AirPlayXPCHelper" messages, coreaudiod
+  ~0.6% CPU, default output back on the Scarlett (not the iPhone).
+- Install note: `sudo` can't prompt from Claude Code's `!` shell (no terminal), and a root
+  shell from `osascript ... with administrator privileges` can't read ~/Documents (privacy
+  protection: "Operation not permitted"). What worked: copy `build/driver/EIEPro.driver`
+  to a temp folder, then osascript-with-admin `rm` / `cp` / `chown` / `killall coreaudiod`
+  from there (native password dialog). One coreaudiod restart this boot.
+- Property test (Swift, outside the app) against the installed driver, all pass: `eSta`
+  read (firmware 1.04, 48 kHz, 0 restarts/errors); `eKpA` 1 starts streaming with no
+  client, 0 stops it; peaks ~-77 dBFS (input noise floor) while streaming; `eMOu` 6 bytes
+  accepted, `midiOut` = 6 (nothing on the wire checked: no MIDI cable); `eMIn` empty.
+- App: was 36% CPU constantly. Cause: every 1/15 s poll re-assigned every @Published
+  value, so SwiftUI redrew the menu-bar label and menu even when closed. Fix: assign only
+  on change; poll at 15 Hz only while the menu is open (`menuOpen`, set by
+  onAppear/onDisappear), 1 Hz otherwise; meters reset to -90 when not streaming (the
+  driver's last peaks stay stale after a stop). Now ~0% with the menu closed.
+- Not verified: CPU and meters with the menu open (needs a click), MIDI on the wire,
+  MIDI in.

@@ -23,14 +23,14 @@ private func address(_ sel: AudioObjectPropertySelector) -> AudioObjectPropertyA
 }
 
 final class DeviceLink: ObservableObject {
-    @Published private(set) var connected = false
-    @Published private(set) var firmware = ""
-    @Published private(set) var rate: Double = 48000
-    @Published private(set) var streaming = false
-    @Published private(set) var restarts = 0
-    @Published private(set) var levels: [Float] = [-90, -90, -90, -90]   // dBFS, with a slow fall
-    @Published private(set) var midiIn = 0
-    @Published private(set) var midiOut = 0
+    @Published fileprivate(set) var connected = false
+    @Published fileprivate(set) var firmware = ""
+    @Published fileprivate(set) var rate: Double = 48000
+    @Published fileprivate(set) var streaming = false
+    @Published fileprivate(set) var restarts = 0
+    @Published fileprivate(set) var levels: [Float] = [-90, -90, -90, -90]   // dBFS, with a slow fall
+    @Published fileprivate(set) var midiIn = 0
+    @Published fileprivate(set) var midiOut = 0
     @Published var keepAwake = UserDefaults.standard.bool(forKey: "keepAwake") {
         didSet {
             UserDefaults.standard.set(keepAwake, forKey: "keepAwake")
@@ -59,7 +59,23 @@ final class DeviceLink: ObservableObject {
             self?.findDevice()
         }
         findDevice()
-        timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 15, repeats: true) { [weak self] _ in self?.poll() }
+        startTimer()
+    }
+
+    /// Set by the menu view. Meters need 15 updates a second only while the menu is open;
+    /// closed, a slow check keeps the icon and MIDI fallback going for almost no CPU.
+    var menuOpen = false {
+        didSet { if menuOpen != oldValue { startTimer(); if menuOpen { poll() } } }
+    }
+
+    private func startTimer() {
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: menuOpen ? 1.0 / 15 : 1.0, repeats: true) { [weak self] _ in self?.poll() }
+    }
+
+    /// Assign only on change: every assignment of a @Published value redraws the views.
+    private func update<T: Equatable>(_ path: ReferenceWritableKeyPath<DeviceLink, T>, _ value: T) {
+        if self[keyPath: path] != value { self[keyPath: path] = value }
     }
 
     // MARK: device
@@ -109,23 +125,25 @@ final class DeviceLink: ObservableObject {
 
     private func poll() {
         guard device != 0, let d = getPlist(kPropStatus, on: device) as? [String: Any] else {
-            if connected { connected = false }
+            update(\.connected, false)
             return
         }
-        connected = (d["connected"] as? Bool) ?? false
-        firmware = (d["firmware"] as? String) ?? ""
-        streaming = (d["streaming"] as? Bool) ?? false
-        if let r = d["rate"] as? Double, r != rate { rate = r }
-        restarts = Int((d["restarts"] as? Double) ?? 0)
-        midiIn = Int((d["midiIn"] as? Double) ?? 0)
-        midiOut = Int((d["midiOut"] as? Double) ?? 0)
-        if let peaks = d["peaks"] as? [Double], peaks.count == 4 {
-            var next = levels
-            for i in 0..<4 {
-                let db = Float(peaks[i] > 1e-6 ? 20 * log10(peaks[i]) : -90)
-                next[i] = max(db, levels[i] - 1.5)   // fall about 22 dB a second
+        update(\.connected, (d["connected"] as? Bool) ?? false)
+        update(\.firmware, (d["firmware"] as? String) ?? "")
+        update(\.streaming, (d["streaming"] as? Bool) ?? false)
+        if let r = d["rate"] as? Double { update(\.rate, r) }
+        update(\.restarts, Int((d["restarts"] as? Double) ?? 0))
+        update(\.midiIn, Int((d["midiIn"] as? Double) ?? 0))
+        update(\.midiOut, Int((d["midiOut"] as? Double) ?? 0))
+        if menuOpen {
+            var next: [Float] = [-90, -90, -90, -90]
+            if streaming, let peaks = d["peaks"] as? [Double], peaks.count == 4 {
+                for i in 0..<4 {
+                    let db = Float(peaks[i] > 1e-6 ? 20 * log10(peaks[i]) : -90)
+                    next[i] = max(db, levels[i] - 1.5)   // fall about 22 dB a second
+                }
             }
-            levels = next
+            update(\.levels, next)
         }
         readMidiIn()   // in case a notification was missed
     }
