@@ -53,6 +53,6 @@ mkdir -p "$DIR"
 cp "$STAGE/EIE Pro $VER.pkg" "$DIR/"
 sed "s/@VERSION@/$VER/g" package/how-to-install.html > "$STAGE/how-to-install.html"
 textutil -convert rtf -output "$DIR/How to install.rtf" "$STAGE/how-to-install.html"
-(cd "$OUT" && ditto -c -k --keepParent "EIE Pro $VER" "EIE-Pro-$VER.zip")
+(cd "$OUT" && ditto -c -k --norsrc --noextattr --keepParent "EIE Pro $VER" "EIE-Pro-$VER.zip")
 rm -rf "$STAGE"
 echo "Release: $OUT/EIE-Pro-$VER.zip"
