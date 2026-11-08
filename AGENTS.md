@@ -178,3 +178,31 @@ Facts from the eie-pro-linux README, checked on the user's unit:
   to the driver through libASPL custom properties (MIDI bytes as CFData; driver signals
   new input with a property-changed notification). The same app becomes the control app
   (status, sample rate, later mixer/monitoring).
+
+## 2026-11-08 (later): control app, keep-awake, MIDI via the app; macOS AirPlay loop
+
+- Driver: the in-driver CoreMIDI attempt is gone. Custom properties on the device for the
+  app: `eSta` (status dict: connected, firmware, rate, streaming, keepAwake, restarts,
+  errors, 4 input peaks since last read, MIDI byte totals), `eKpA` (keep awake 0/1: the
+  box keeps streaming with no app using it, so no start tick and MIDI without audio),
+  `eMIn` (MIDI bytes from the box, drained on read; the driver posts a property change when
+  bytes arrive), `eMOu` (set: raw MIDI bytes to send). StartIO joins a kept-awake stream;
+  StopIO leaves it running; wake and hotplug respect keep-awake.
+- `app/`: "EIE Pro.app", SwiftUI menu-bar app (Swift package + `build.sh [--install]`,
+  ad-hoc signed, LSUIElement). Status, sample-rate picker, 4 input meters, keep-awake,
+  MIDI ports "EIE Pro MIDI In" / "EIE Pro MIDI Out" (CoreMIDI works from a user-session
+  app), open at login. `@State` can't be used with the command line tools (no SwiftUI
+  macro plug-in), so view state lives in the ObservableObject.
+- Verified: the app builds and runs; both MIDI ports appear in CoreMIDI. NOT verified:
+  the custom properties end to end (the audio server got stuck before the test, below).
+- **macOS bug hit:** after many `killall coreaudiod` restarts in one boot, coreaudiod loops
+  "Registering remote driver with bundle id com.apple.AirPlayXPCHelper" at 140% CPU and
+  stops answering, so all Mac audio dies. The count doubles with every coreaudiod restart
+  (2, 4, 8 … 3,000+/min). Not caused by this driver: it continued with the driver
+  removed. AirPlayXPCHelper is SIP-protected (`launchctl kickstart -k` doesn't restart
+  it), so only a reboot clears it. Lesson: restart coreaudiod as few times as possible
+  per boot while developing; batch driver changes; reboot if audio misbehaves after
+  many reinstalls.
+- State at the end: driver REMOVED from /Library/Audio/Plug-Ins/HAL (to rule it out), app
+  quit. After the reboot: reinstall the driver once, run the property test
+  (`scratchpad/proptest.swift` equivalent), open the app.

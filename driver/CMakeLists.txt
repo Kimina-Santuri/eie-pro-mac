@@ -30,7 +30,7 @@ target_compile_options(EIEPro PRIVATE -O2 -Wall)
 target_link_libraries(EIEPro PRIVATE
   ${CMAKE_CURRENT_BINARY_DIR}/libASPL-prefix/lib/libASPL.a
   ${BREW}/lib/libusb-1.0.a
-  "-framework CoreFoundation" "-framework CoreAudio" "-framework CoreMIDI" "-framework IOKit" "-framework Security")
+  "-framework CoreFoundation" "-framework CoreAudio" "-framework IOKit" "-framework Security")
 
 set_target_properties(EIEPro PROPERTIES
   OUTPUT_NAME "EIEPro"

@@ -17,7 +17,6 @@
 #include <IOKit/usb/IOUSBLib.h>
 #include <IOKit/pwr_mgt/IOPMLib.h>
 #include <IOKit/IOMessage.h>
-#include <CoreMIDI/CoreMIDI.h>
 #include <dispatch/dispatch.h>
 #include <mach/mach_time.h>
 #include <os/log.h>
@@ -64,139 +63,87 @@ AudioStreamBasicDescription FloatFormat(Float64 rate)
     return f;
 }
 
-// The EIE Pro's MIDI sockets as two CoreMIDI ports, "EIE Pro MIDI In" (a source apps
-// read from) and "EIE Pro MIDI Out" (a destination apps send to). Bytes from the box
-// arrive as a raw stream and are cut into whole messages here.
-class Midi
+// Link to the EIE Pro app. macOS keeps CoreMIDI per user session and this driver runs
+// as a system process, so the app (a normal menu-bar app) hosts the MIDI ports and
+// talks to the driver through custom properties on the device:
+constexpr AudioObjectPropertySelector kPropStatus = 'eSta';     // get: dictionary
+constexpr AudioObjectPropertySelector kPropKeepAwake = 'eKpA';  // get/set: number 0 or 1
+constexpr AudioObjectPropertySelector kPropMidiIn = 'eMIn';     // get: data, drains; notified on arrival
+constexpr AudioObjectPropertySelector kPropMidiOut = 'eMOu';    // set: data, raw MIDI bytes
+
+class AppLink
 {
 public:
-    void Start()
-    {
-        OSStatus s = MIDIClientCreate(CFSTR("EIE Pro"), nullptr, nullptr, &client_);
-        if (s) { os_log_error(Log(), "MIDI: client failed (%d)", (int)s); return; }
-        s = MIDISourceCreate(client_, CFSTR("EIE Pro MIDI In"), &source_);
-        if (s) os_log_error(Log(), "MIDI: source failed (%d)", (int)s);
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-        s = MIDIDestinationCreate(client_, CFSTR("EIE Pro MIDI Out"), &Midi::OnSend, this, &dest_);
-#pragma clang diagnostic pop
-        if (s) os_log_error(Log(), "MIDI: destination failed (%d)", (int)s);
-        // keep the same identity across restarts so apps remember their mappings
-        SInt32 a = 0x45494531, b = 0x45494532;   // "EIE1", "EIE2"
-        if (source_) MIDIObjectSetIntegerProperty(source_, kMIDIPropertyUniqueID, a);
-        if (dest_) MIDIObjectSetIntegerProperty(dest_, kMIDIPropertyUniqueID, b);
-        os_log(Log(), "MIDI: ports ready");
-    }
+    AppLink() { queue_ = dispatch_queue_create("co.ke.kimina.eie-pro.applink", DISPATCH_QUEUE_SERIAL); }
 
+    void SetDevice(const aspl::Object* d) { device_ = d; }
     void SetEngine(eie_t* e) { engine_.store(e); }
 
-    // USB thread: raw bytes from MIDI IN.
-    static void FromBox(void* ctx, const unsigned char* bytes, int n)
+    // USB thread: raw bytes from the box's MIDI IN socket.
+    static void FromBox(void* ctx, const unsigned char* b, int n)
     {
-        auto* m = static_cast<Midi*>(ctx);
-        for (int i = 0; i < n; i++) m->Parse(bytes[i]);
+        auto* a = static_cast<AppLink*>(ctx);
+        unsigned w = a->w_.load(std::memory_order_relaxed), r = a->r_.load(std::memory_order_acquire);
+        for (int i = 0; i < n && (w - r) < kRing; i++) a->ring_[w++ & (kRing - 1)] = b[i];
+        a->w_.store(w, std::memory_order_release);
+        a->midiIn_ += n;
+        if (!a->notifyPending_.exchange(true)) dispatch_async_f(a->queue_, a, &AppLink::Notify);
     }
+
+    // App reads kPropMidiIn.
+    CFPropertyListRef TakeMidiIn()
+    {
+        unsigned r = r_.load(std::memory_order_relaxed), w = w_.load(std::memory_order_acquire);
+        UInt8 out[kRing];
+        CFIndex n = 0;
+        while (r != w) out[n++] = ring_[r++ & (kRing - 1)];
+        r_.store(r, std::memory_order_release);
+        return CFDataCreate(nullptr, out, n);
+    }
+
+    // App writes kPropMidiOut.
+    void SendMidi(CFPropertyListRef v)
+    {
+        if (!v || CFGetTypeID(v) != CFDataGetTypeID()) return;
+        auto d = static_cast<CFDataRef>(v);
+        eie_t* e = engine_.load();
+        if (!e) return;
+        midiOut_ += eie_midi_send(e, CFDataGetBytePtr(d), int(CFDataGetLength(d)));
+    }
+
+    long MidiInTotal() const { return midiIn_.load(); }
+    long MidiOutTotal() const { return midiOut_.load(); }
 
 private:
-    static int DataLen(unsigned char status)
+    static void Notify(void* p)
     {
-        switch (status & 0xF0) {
-        case 0xC0: case 0xD0: return 1;
-        case 0xF0:
-            switch (status) {
-            case 0xF1: case 0xF3: return 1;
-            case 0xF2: return 2;
-            default: return 0;
-            }
-        default: return 2;
-        }
+        auto* a = static_cast<AppLink*>(p);
+        a->notifyPending_ = false;
+        if (a->device_) a->device_->NotifyPropertyChanged(kPropMidiIn);
     }
 
-    void Parse(unsigned char b)
-    {
-        if (b >= 0xF8) { Emit(&b, 1); return; }            // real-time: alone, any time
-        if (b == 0xF0) { sysexLen_ = 0; inSysex_ = true; Sysex(b); return; }
-        if (inSysex_) {
-            if (b == 0xF7) { Sysex(b); EmitSysex(); inSysex_ = false; return; }
-            if (b < 0x80) { Sysex(b); return; }
-            inSysex_ = false;                                // cut short by a new status
-            EmitSysex();
-        }
-        if (b >= 0x80) {
-            status_ = b; have_ = 0; need_ = DataLen(b);
-            if (b >= 0xF0) status_ = (need_ == 0) ? 0 : b;   // system common: no running status
-            if (need_ == 0) { Emit(&b, 1); }
-            return;
-        }
-        if (!status_) return;                                // stray data byte
-        msg_[1 + have_++] = b;
-        if (have_ == need_) {
-            msg_[0] = status_;
-            Emit(msg_, 1 + need_);
-            have_ = 0;
-            if (status_ >= 0xF0) status_ = 0;
-        }
-    }
-
-    void Sysex(unsigned char b)
-    {
-        if (sysexLen_ < sizeof sysex_) sysex_[sysexLen_++] = b;
-    }
-
-    void EmitSysex()
-    {
-        if (sysexLen_) Emit(sysex_, sysexLen_);
-        sysexLen_ = 0;
-    }
-
-    void Emit(const unsigned char* d, size_t n)
-    {
-        if (!source_) return;
-        alignas(4) Byte buf[sizeof(MIDIPacketList) + sizeof sysex_];
-        auto* list = reinterpret_cast<MIDIPacketList*>(buf);
-        MIDIPacket* p = MIDIPacketListInit(list);
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-        p = MIDIPacketListAdd(list, sizeof buf, p, 0, n, d);   // timestamp 0 = now
-        if (p) MIDIReceived(source_, list);
-#pragma clang diagnostic pop
-    }
-
-    // CoreMIDI thread: apps sending to "EIE Pro MIDI Out".
-    static void OnSend(const MIDIPacketList* list, void* self, void*)
-    {
-        auto* m = static_cast<Midi*>(self);
-        eie_t* e = m->engine_.load();
-        if (!e) return;
-        const MIDIPacket* p = &list->packet[0];
-        for (UInt32 i = 0; i < list->numPackets; i++) {
-            eie_midi_send(e, p->data, p->length);
-            p = MIDIPacketNext(p);
-        }
-    }
-
-    MIDIClientRef client_ = 0;
-    MIDIEndpointRef source_ = 0, dest_ = 0;
+    static constexpr unsigned kRing = 8192;
+    UInt8 ring_[kRing];
+    std::atomic<unsigned> w_{0}, r_{0};
+    std::atomic<bool> notifyPending_{false};
+    std::atomic<long> midiIn_{0}, midiOut_{0};
     std::atomic<eie_t*> engine_{nullptr};
-    unsigned char status_ = 0, msg_[3] = {};
-    int need_ = 0, have_ = 0;
-    bool inSysex_ = false;
-    unsigned char sysex_[1024];
-    size_t sysexLen_ = 0;
+    const aspl::Object* device_ = nullptr;
+    dispatch_queue_t queue_;
 };
 
-Midi& TheMidi()
+AppLink& TheLink()
 {
-    static Midi* m = new Midi;
-    return *m;
+    static AppLink* a = new AppLink;
+    return *a;
 }
 
 // Every newly opened engine gets the same logging and MIDI hooks.
 void ConfigureEngine(eie_t* e)
 {
     eie_set_log(e, [](const char* m) { os_log(Log(), "%{public}s", m); });
-    eie_set_midi(e, &Midi::FromBox, &TheMidi());
-    TheMidi().SetEngine(e);
+    eie_set_midi(e, &AppLink::FromBox, &TheLink());
+    TheLink().SetEngine(e);
 }
 
 class EieDevice;
@@ -238,6 +185,8 @@ public:
     std::atomic<UInt64> startHostTime{0};
     bool ioRunning = false;             // under controlMutex: Core Audio wants I/O
     bool streaming = false;             // under controlMutex: the box is actually streaming
+    bool keepAwake = false;             // under controlMutex: the app asked to keep streaming
+    std::atomic<float> peak[kChannels] = {};   // input peaks since the app last read them
     std::vector<std::shared_ptr<EieStream>> eieStreams;
 
     alignas(64) float outRing[kRingFrames * kChannels] = {};
@@ -269,7 +218,7 @@ public:
     bool ReopenLocked()
     {
         eie_t* old = engine.exchange(nullptr);
-        TheMidi().SetEngine(nullptr);
+        TheLink().SetEngine(nullptr);
         streaming = false;
         if (old) {
             usleep(50 * 1000);   // let a real-time reader that loaded the pointer finish
@@ -377,8 +326,11 @@ public:
             os_log_error(Log(), "StartIO: no EIE Pro connected");
             return kAudioHardwareNotRunningError;
         }
-        dev_->render = &Handler::Render;
-        dev_->capture = &Handler::Capture;
+        if (dev_->streaming) {   // already running (kept awake by the app): just join
+            dev_->ioRunning = true;
+            os_log(Log(), "StartIO: joined the running stream at %.0f Hz", dev_->GetNominalSampleRate());
+            return kAudioHardwareNoError;
+        }
         int r = dev_->StartWithRecoveryLocked();
         if (r) {
             os_log_error(Log(), "StartIO: engine failed to start: %{public}s", eie_strerror(r));
@@ -393,6 +345,10 @@ public:
     {
         std::lock_guard<std::mutex> lock(dev_->controlMutex);
         dev_->ioRunning = false;
+        if (dev_->keepAwake) {
+            os_log(Log(), "StopIO: kept streaming (keep awake is on)");
+            return;
+        }
         dev_->streaming = false;
         if (eie_t* e = dev_->engine.load()) {
             eie_stats_t st;
@@ -428,7 +384,7 @@ public:
         }
     }
 
-private:
+public:
     // Engine thread: take frames [pos, pos+n) from the output ring, clearing them so
     // nothing repeats if apps stop writing.
     static void Render(void* ctx, float* out, int n, long long pos)
@@ -446,10 +402,18 @@ private:
     static void Capture(void* ctx, const float* in, int n, long long pos)
     {
         auto* d = static_cast<EieDevice*>(ctx);
+        float pk[kChannels] = {};
         for (int i = 0; i < n; i++, pos++) {
             float* dst = &d->inRing[(pos & (kRingFrames - 1)) * kChannels];
-            for (UInt32 c = 0; c < kChannels; c++) dst[c] = in[i * kChannels + c];
+            for (UInt32 c = 0; c < kChannels; c++) {
+                float v = in[i * kChannels + c];
+                dst[c] = v;
+                v = v < 0 ? -v : v;
+                if (v > pk[c]) pk[c] = v;
+            }
         }
+        for (UInt32 c = 0; c < kChannels; c++)
+            if (pk[c] > d->peak[c].load(std::memory_order_relaxed)) d->peak[c].store(pk[c], std::memory_order_relaxed);
     }
 
     EieDevice* dev_;
@@ -560,6 +524,10 @@ private:
             plugin_->AddDevice(device_);
             added_ = true;
         }
+        {
+            std::lock_guard<std::mutex> lock(device_->controlMutex);
+            if (device_->keepAwake && !device_->streaming) device_->StartWithRecoveryLocked();
+        }
         os_log(Log(), "EIE Pro connected, firmware %{public}s", eie_firmware(e));
     }
 
@@ -601,7 +569,7 @@ private:
             os_log(Log(), "woke up; no EIE Pro open");
             return;
         }
-        if (!device_->ioRunning) {
+        if (!device_->ioRunning && !device_->keepAwake) {
             // Nothing playing: refresh the USB handle now so the next play starts cleanly.
             device_->ReopenLocked();
             os_log(Log(), "woke up; box reopened, idle");
@@ -621,7 +589,7 @@ private:
         {
             std::lock_guard<std::mutex> lock(device_->controlMutex);
             e = device_->engine.exchange(nullptr);
-            TheMidi().SetEngine(nullptr);
+            TheLink().SetEngine(nullptr);
             device_->ioRunning = false;
             device_->streaming = false;
         }
@@ -687,6 +655,71 @@ std::shared_ptr<aspl::Driver> CreateDriver()
         device->eieStreams.push_back(s);
     }
 
+    device->render = &Handler::Render;
+    device->capture = &Handler::Capture;
+    TheLink().SetDevice(device.get());
+    EieDevice* dev = device.get();
+
+    device->RegisterCustomProperty(kPropStatus, [dev]() -> CFPropertyListRef {
+        CFMutableDictionaryRef d = CFDictionaryCreateMutable(nullptr, 0, &kCFTypeDictionaryKeyCallBacks,
+            &kCFTypeDictionaryValueCallBacks);
+        auto num = [&](CFStringRef k, double v) {
+            CFNumberRef n = CFNumberCreate(nullptr, kCFNumberDoubleType, &v);
+            CFDictionarySetValue(d, k, n);
+            CFRelease(n);
+        };
+        eie_t* e = dev->engine.load();
+        CFDictionarySetValue(d, CFSTR("connected"), e ? kCFBooleanTrue : kCFBooleanFalse);
+        CFDictionarySetValue(d, CFSTR("streaming"), dev->streaming ? kCFBooleanTrue : kCFBooleanFalse);
+        CFDictionarySetValue(d, CFSTR("keepAwake"), dev->keepAwake ? kCFBooleanTrue : kCFBooleanFalse);
+        num(CFSTR("rate"), dev->GetNominalSampleRate());
+        if (e) {
+            CFStringRef fw = CFStringCreateWithCString(nullptr, eie_firmware(e), kCFStringEncodingUTF8);
+            CFDictionarySetValue(d, CFSTR("firmware"), fw);
+            CFRelease(fw);
+            eie_stats_t st;
+            eie_get_stats(e, &st);
+            num(CFSTR("restarts"), st.restarts);
+            num(CFSTR("errors"), st.errors);
+        }
+        CFMutableArrayRef peaks = CFArrayCreateMutable(nullptr, kChannels, &kCFTypeArrayCallBacks);
+        for (UInt32 c = 0; c < kChannels; c++) {
+            double v = dev->peak[c].exchange(0.f);
+            CFNumberRef n = CFNumberCreate(nullptr, kCFNumberDoubleType, &v);
+            CFArrayAppendValue(peaks, n);
+            CFRelease(n);
+        }
+        CFDictionarySetValue(d, CFSTR("peaks"), peaks);
+        CFRelease(peaks);
+        num(CFSTR("midiIn"), TheLink().MidiInTotal());
+        num(CFSTR("midiOut"), TheLink().MidiOutTotal());
+        return d;
+    });
+
+    device->RegisterCustomProperty(kPropKeepAwake,
+        [dev]() -> CFPropertyListRef {
+            int v = dev->keepAwake ? 1 : 0;
+            return CFNumberCreate(nullptr, kCFNumberIntType, &v);
+        },
+        [dev](CFPropertyListRef v) {
+            int on = 0;
+            if (v && CFGetTypeID(v) == CFNumberGetTypeID()) CFNumberGetValue((CFNumberRef)v, kCFNumberIntType, &on);
+            else if (v && CFGetTypeID(v) == CFBooleanGetTypeID()) on = CFBooleanGetValue((CFBooleanRef)v);
+            std::lock_guard<std::mutex> lock(dev->controlMutex);
+            dev->keepAwake = on != 0;
+            if (dev->keepAwake && dev->engine.load() && !dev->streaming) dev->StartWithRecoveryLocked();
+            if (!dev->keepAwake && dev->streaming && !dev->ioRunning) {
+                if (eie_t* e = dev->engine.load()) eie_stop(e);
+                dev->streaming = false;
+            }
+            os_log(Log(), "keep awake %{public}s", dev->keepAwake ? "on" : "off");
+        });
+
+    device->RegisterCustomProperty(kPropMidiIn, []() -> CFPropertyListRef { return TheLink().TakeMidiIn(); });
+    device->RegisterCustomProperty(kPropMidiOut,
+        []() -> CFPropertyListRef { return CFDataCreate(nullptr, nullptr, 0); },
+        [](CFPropertyListRef v) { TheLink().SendMidi(v); });
+
     auto handler = std::make_shared<Handler>(device.get());
     device->SetControlHandler(handler);
     device->SetIOHandler(handler);
@@ -694,7 +727,6 @@ std::shared_ptr<aspl::Driver> CreateDriver()
     auto plugin = std::make_shared<aspl::Plugin>(context);
     auto driver = std::make_shared<aspl::Driver>(context, plugin);
 
-    TheMidi().Start();
     static Hotplug* hotplug = new Hotplug(plugin, device);   // lives as long as the audio server
     hotplug->Start();
     os_log(Log(), "EIE Pro driver loaded");
