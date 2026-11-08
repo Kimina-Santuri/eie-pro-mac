@@ -206,3 +206,11 @@ Facts from the eie-pro-linux README, checked on the user's unit:
 - State at the end: driver REMOVED from /Library/Audio/Plug-Ins/HAL (to rule it out), app
   quit. After the reboot: reinstall the driver once, run the property test
   (`scratchpad/proptest.swift` equivalent), open the app.
+- Follow-up: the user's sound then jumped to their iPhone. The Mac had NOT been rebooted
+  yet (uptime 4 h 49 min); coreaudiod was still looping, and apps polling audio (WhatsApp,
+  Kilele, Control Center, NIHardwareAgent, avconferenced/callservicesd) spun at 40–60% CPU
+  each, load average 44. Continuity pulled the iPhone in as an audio route. Stuck test
+  scripts of ours were killed. Fix: full restart (user restarting now).
+- After the restart: check default output/input (switch back from the iPhone if needed,
+  e.g. System Settings → Sound), check coreaudiod CPU and that the AirPlay message count is
+  low, then install the driver ONCE, run the property test, open the app, push 4fe7d05+.
