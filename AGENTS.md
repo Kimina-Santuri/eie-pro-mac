@@ -235,3 +235,17 @@ Facts from the eie-pro-linux README, checked on the user's unit:
   driver's last peaks stay stale after a stop). Now ~0% with the menu closed.
 - Not verified: CPU and meters with the menu open (needs a click), MIDI on the wire,
   MIDI in.
+
+## 2026-11-08 (evening): output meters
+
+- Driver: `Render` (the mix actually sent to the box) records per-channel peaks into
+  `outPeak[]`; `eSta` gains `outPeaks` next to `peaks` (both drained on read).
+- App: "Outputs" meters 1–4 under the inputs; shared `meter()` helper; meters show -90
+  when not streaming. Reinstalled driver + app (second coreaudiod restart this boot, no
+  AirPlay loop: 0 messages).
+- Measured: driver process ~28% CPU while streaming (Brave playing through it), almost
+  all of it kernel time on the libusb event thread (prio 97: 10 s system vs 1.3 s user):
+  the 1 ms USB transfers (CLOCK_PKTS 1), not the metering. Idle (not streaming) it is
+  <1%. Possible later work: fewer, larger transfers, but that touches the pacing that
+  gives clean audio; only with listening tests.
+- Not verified: the user seeing the output meters move.

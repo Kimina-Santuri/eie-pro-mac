@@ -28,7 +28,8 @@ final class DeviceLink: ObservableObject {
     @Published fileprivate(set) var rate: Double = 48000
     @Published fileprivate(set) var streaming = false
     @Published fileprivate(set) var restarts = 0
-    @Published fileprivate(set) var levels: [Float] = [-90, -90, -90, -90]   // dBFS, with a slow fall
+    @Published fileprivate(set) var levels: [Float] = [-90, -90, -90, -90]      // inputs, dBFS, with a slow fall
+    @Published fileprivate(set) var outLevels: [Float] = [-90, -90, -90, -90]   // outputs, same
     @Published fileprivate(set) var midiIn = 0
     @Published fileprivate(set) var midiOut = 0
     @Published var keepAwake = UserDefaults.standard.bool(forKey: "keepAwake") {
@@ -136,16 +137,18 @@ final class DeviceLink: ObservableObject {
         update(\.midiIn, Int((d["midiIn"] as? Double) ?? 0))
         update(\.midiOut, Int((d["midiOut"] as? Double) ?? 0))
         if menuOpen {
-            var next: [Float] = [-90, -90, -90, -90]
-            if streaming, let peaks = d["peaks"] as? [Double], peaks.count == 4 {
-                for i in 0..<4 {
-                    let db = Float(peaks[i] > 1e-6 ? 20 * log10(peaks[i]) : -90)
-                    next[i] = max(db, levels[i] - 1.5)   // fall about 22 dB a second
-                }
-            }
-            update(\.levels, next)
+            update(\.levels, meter(d["peaks"], levels))
+            update(\.outLevels, meter(d["outPeaks"], outLevels))
         }
         readMidiIn()   // in case a notification was missed
+    }
+
+    /// Peaks (linear, since the last read) to dBFS meter values that fall about 22 dB a second.
+    private func meter(_ raw: Any?, _ last: [Float]) -> [Float] {
+        guard streaming, let peaks = raw as? [Double], peaks.count == 4 else { return [-90, -90, -90, -90] }
+        return (0..<4).map { i in
+            max(Float(peaks[i] > 1e-6 ? 20 * log10(peaks[i]) : -90), last[i] - 1.5)
+        }
     }
 
     // MARK: controls

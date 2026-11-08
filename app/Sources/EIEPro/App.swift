@@ -52,6 +52,10 @@ struct MenuView: View {
                     ForEach(0..<4, id: \.self) { i in
                         MeterRow(label: "\(i + 1)", db: link.levels[i])
                     }
+                    Text("Outputs").font(.caption).foregroundStyle(.secondary).padding(.top, 4)
+                    ForEach(0..<4, id: \.self) { i in
+                        MeterRow(label: "\(i + 1)", db: link.outLevels[i])
+                    }
                 }
 
                 VStack(alignment: .leading, spacing: 2) {

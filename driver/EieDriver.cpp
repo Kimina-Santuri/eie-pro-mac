@@ -186,7 +186,8 @@ public:
     bool ioRunning = false;             // under controlMutex: Core Audio wants I/O
     bool streaming = false;             // under controlMutex: the box is actually streaming
     bool keepAwake = false;             // under controlMutex: the app asked to keep streaming
-    std::atomic<float> peak[kChannels] = {};   // input peaks since the app last read them
+    std::atomic<float> peak[kChannels] = {};      // input peaks since the app last read them
+    std::atomic<float> outPeak[kChannels] = {};   // output peaks: the mix actually sent to the box
     std::vector<std::shared_ptr<EieStream>> eieStreams;
 
     alignas(64) float outRing[kRingFrames * kChannels] = {};
@@ -390,13 +391,19 @@ public:
     static void Render(void* ctx, float* out, int n, long long pos)
     {
         auto* d = static_cast<EieDevice*>(ctx);
+        float pk[kChannels] = {};
         for (int i = 0; i < n; i++, pos++) {
             float* src = &d->outRing[(pos & (kRingFrames - 1)) * kChannels];
             for (UInt32 c = 0; c < kChannels; c++) {
-                out[i * kChannels + c] = src[c];
+                float v = src[c];
+                out[i * kChannels + c] = v;
                 src[c] = 0.f;
+                v = v < 0 ? -v : v;
+                if (v > pk[c]) pk[c] = v;
             }
         }
+        for (UInt32 c = 0; c < kChannels; c++)
+            if (pk[c] > d->outPeak[c].load(std::memory_order_relaxed)) d->outPeak[c].store(pk[c], std::memory_order_relaxed);
     }
 
     static void Capture(void* ctx, const float* in, int n, long long pos)
@@ -682,15 +689,19 @@ std::shared_ptr<aspl::Driver> CreateDriver()
             num(CFSTR("restarts"), st.restarts);
             num(CFSTR("errors"), st.errors);
         }
-        CFMutableArrayRef peaks = CFArrayCreateMutable(nullptr, kChannels, &kCFTypeArrayCallBacks);
-        for (UInt32 c = 0; c < kChannels; c++) {
-            double v = dev->peak[c].exchange(0.f);
-            CFNumberRef n = CFNumberCreate(nullptr, kCFNumberDoubleType, &v);
-            CFArrayAppendValue(peaks, n);
-            CFRelease(n);
-        }
-        CFDictionarySetValue(d, CFSTR("peaks"), peaks);
-        CFRelease(peaks);
+        auto peaks = [&](CFStringRef key, std::atomic<float>* src) {
+            CFMutableArrayRef a = CFArrayCreateMutable(nullptr, kChannels, &kCFTypeArrayCallBacks);
+            for (UInt32 c = 0; c < kChannels; c++) {
+                double v = src[c].exchange(0.f);
+                CFNumberRef n = CFNumberCreate(nullptr, kCFNumberDoubleType, &v);
+                CFArrayAppendValue(a, n);
+                CFRelease(n);
+            }
+            CFDictionarySetValue(d, key, a);
+            CFRelease(a);
+        };
+        peaks(CFSTR("peaks"), dev->peak);
+        peaks(CFSTR("outPeaks"), dev->outPeak);
         num(CFSTR("midiIn"), TheLink().MidiInTotal());
         num(CFSTR("midiOut"), TheLink().MidiOutTotal());
         return d;
