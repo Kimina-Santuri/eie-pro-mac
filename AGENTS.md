@@ -249,3 +249,18 @@ Facts from the eie-pro-linux README, checked on the user's unit:
   <1%. Possible later work: fewer, larger transfers, but that touches the pacing that
   gives clean audio; only with listening tests.
 - Not verified: the user seeing the output meters move.
+
+## 2026-11-08 (evening): driver CPU, step 1 (bigger input transfers)
+
+- Input bulk transfers 2048 → 16384 B (32 → 256 frames; 1500 → ~190 per second at
+  48 kHz). Extra input delay ≤ 5.3 ms, inside the 32 ms safety offset.
+- Measured with Brave playing through the box: driver process 28% → ~21% CPU, 0 restarts,
+  0 errors, AirPlay loop still absent (third coreaudiod restart this boot).
+- Remaining: clock 1000 transfers/s (CLOCK_PKTS 1) and out 500/s (OUT_PKTS 16). Next
+  candidates: CLOCK_PKTS 2 (pacing still sees every out chunk), then 4 ms out transfers
+  (OUT_PKTS 32 × 6, same 24 ms queue). Both touch output timing: listening test each.
+- Front-panel needle meters don't move (reported by the user): manual says IN/OUT and
+  1/2 / 3/4 switches pick the source, nothing about the computer. Waiting on the user's
+  answers about switch positions; suspect register 0x49 (0x12 cold, 0x32 after start-up)
+  if they never move.
+- Not verified: the user's ears on this build; recording timing with the bigger transfers.

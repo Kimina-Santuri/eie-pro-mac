@@ -60,8 +60,11 @@ void eie_trace_dump(const char *path) { FILE *f = fopen(path, "w"); mach_timebas
 #ifndef IN_XFERS
 #define IN_XFERS      4
 #endif
+/* Input arrives in 256-frame bulk transfers (5.3 ms at 48 kHz, 2.7 ms at 96): every
+ * transfer costs a kernel round trip, and at 32 frames (1500 a second) input was most of
+ * the driver's CPU. The extra input delay sits well inside the 32 ms safety offset. */
 #ifndef IN_XFER_BYTES
-#define IN_XFER_BYTES 2048  /* 32 frames */
+#define IN_XFER_BYTES 16384 /* 256 frames */
 #endif
 #define IN_FRAME_BYTES 64
 
