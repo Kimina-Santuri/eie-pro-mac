@@ -4,11 +4,23 @@ A new, open-source driver for the **Akai Professional EIE Pro** USB audio interf
 modern Macs, including Apple Silicon. Akai's driver dates from 2012 and hasn't worked on
 current macOS for years, so the box usually ends up unused on a shelf.
 
-> **Status: early and experimental, but working.** On an Apple Silicon Mac (macOS 27),
-> the EIE Pro shows up as a normal 4-in / 4-out sound device at 44.1, 48, 88.2 or
-> 96 kHz, plays and records cleanly, and survives sleep, lid close and unplugging.
-> Not yet tried in DJ software or a DAW. MIDI and a small control app are being built.
+> **Status: early, but working.** On an Apple Silicon Mac, the EIE Pro shows up as a
+> normal 4-in / 4-out sound device at 44.1, 48, 88.2 or 96 kHz, plays and records
+> cleanly in Ableton Live, and survives sleep, lid close and unplugging. A menu-bar app
+> shows input and output meters, sets the sample rate and hosts the MIDI ports.
 > Use at your own risk.
+
+## Download and install
+
+1. Download **EIE-Pro-x.y.z.zip** from the
+   [latest release](https://github.com/Kimina-Santuri/eie-pro-mac/releases/latest) and
+   double-click it.
+2. Follow **How to install** in the folder. In short: open the `.pkg`; when macOS says it
+   can't verify it (it isn't signed with a paid Apple account), click Done, then
+   System Settings → Privacy & Security → **Open Anyway**, and install.
+3. Plug in the EIE Pro and pick **EIE Pro** in System Settings → Sound or in your music app.
+
+Needs macOS 14 or newer, Apple Silicon or Intel. To remove it: menu-bar icon → **Uninstall…**
 
 ## How it works
 
@@ -23,7 +35,7 @@ App ⇄ Core Audio ⇄ EIEPro.driver (libASPL plug-in) ⇄ eie_usb.c (libusb, re
 
 The Mac follows the EIE Pro's own clock, so long sessions don't drift.
 
-## Install (build from source)
+## Build from source
 
 You need the Xcode command line tools, CMake and Homebrew's libusb:
 
@@ -35,7 +47,11 @@ cmake --build build/driver
 ```
 
 Then pick **EIE Pro** in System Settings → Sound, or in your DJ software / DAW.
-`./uninstall.sh` removes it.
+`./uninstall.sh` removes it. The menu-bar app: `app/build.sh --install`.
+
+A release (universal driver + app, installer, zip with the install note):
+`package/make-release.sh 0.1.0` → `build/release/EIE-Pro-0.1.0.zip`. It builds its own
+universal libusb for macOS 12+ (`package/build-libusb.sh`), so Homebrew's isn't used.
 
 ## Test tools
 
@@ -51,10 +67,14 @@ Logs: `log stream --predicate 'subsystem == "co.ke.kimina.eie-pro"'`
 ## Known limits
 
 - Built and tested on one EIE Pro (firmware 1.04) and one Apple Silicon Mac.
-- Homebrew's libusb targets recent macOS; for older Macs build libusb with a lower
-  deployment target first.
+- The installer is not signed or notarised (no paid Apple developer account), so
+  macOS asks you to allow it once in Privacy & Security.
+- Intel Macs: built for, not tested.
 - A small tick when the box starts streaming.
-- MIDI: the USB side is written but untested; the ports will come from the control app.
+- MIDI: ports "EIE Pro MIDI In / Out" come from the menu-bar app; not yet tested with
+  cables.
+- The driver uses about 20% of one CPU core while audio plays (USB traffic every
+  millisecond); under 1% when idle.
 - No Windows version.
 
 ## Thanks

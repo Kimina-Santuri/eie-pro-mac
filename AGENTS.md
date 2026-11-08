@@ -303,3 +303,25 @@ Facts from the eie-pro-linux README, checked on the user's unit:
 - NOT done: `build-libusb.sh` was blocked by Claude Code's auto mode (downloads + builds
   outside code); waiting on the user. Then: real universal build, local install test of
   the pkg, Gatekeeper "Open Anyway" flow on the M2, GitHub release v0.1.0.
+
+## 2026-11-08 (night): release 0.1.0 built, installer tested here, GitHub release
+
+- `build-libusb.sh` run by the user. Found: the macOS 27 SDK has `pipe2` (27.0+), libusb's
+  configure picked it up, so the lib would call a missing function on older macOS. Fixed
+  with `ac_cv_func_pipe2=no` (libusb falls back to pipe + fcntl). Homebrew's libusb has
+  the same problem: never ship with it.
+- `make-release.sh 0.1.0`: driver universal, minos 12.0; app universal, minos 14.0; only
+  system libraries. Zip 900 KB.
+- Installed the release pkg on this Mac through Installer.app (user clicked through):
+  package receipt co.ke.kimina.eie-pro 0.1.0, driver root:wheel, app relaunched by
+  postinstall 2 s after the coreaudiod restart. Straight after install: 4 watchdog
+  restarts, because the old driver's helper process was still streaming for a few seconds
+  (LIBUSB_ERROR_ACCESS ×4 on open) and the Mac was busy; then the user's Mac slept and
+  the box was unplugged. Retest with the box back: 20 s inaudible stream, 0 restarts,
+  0 errors, all inputs live; keep-awake test clean.
+- **Gotcha: in zsh, `log` is a builtin.** `log show …` silently does nothing; use
+  `/usr/bin/log`. Earlier "0 AirPlay messages" checks this session were invalid; the real
+  count after 6 coreaudiod restarts was 33 per 5 min (low, but it doubles per restart).
+- README: Download and install section, status and limits updated.
+- Not verified: the Gatekeeper "Open Anyway" flow and the install on the M2 (next), Intel,
+  the Uninstall button, MIDI with cables.

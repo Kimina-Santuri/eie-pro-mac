@@ -14,7 +14,9 @@ tar -xjf "$WORK/libusb.tar.bz2" -C "$WORK"
 for ARCH in arm64 x86_64; do
   B="$WORK/build-$ARCH"
   mkdir -p "$B"
-  (cd "$B" && CFLAGS="-arch $ARCH -mmacosx-version-min=12.0 -O2" \
+  # ac_cv_func_pipe2=no: the newest SDK has pipe2 (macOS 27+ only); libusb would call it
+  # and crash on older macOS. Without it libusb uses pipe() + fcntl.
+  (cd "$B" && ac_cv_func_pipe2=no CFLAGS="-arch $ARCH -mmacosx-version-min=12.0 -O2" \
     "$WORK/libusb-$VER/configure" --host="$ARCH-apple-darwin" --disable-shared --enable-static \
       --prefix="$B/prefix" >/dev/null && make -j8 >/dev/null && make install >/dev/null)
 done
