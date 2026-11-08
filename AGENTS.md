@@ -264,3 +264,15 @@ Facts from the eie-pro-linux README, checked on the user's unit:
   answers about switch positions; suspect register 0x49 (0x12 cold, 0x32 after start-up)
   if they never move.
 - Not verified: the user's ears on this build; recording timing with the bigger transfers.
+
+## 2026-11-08 (evening): driver CPU, step 2 (4 ms output transfers)
+
+- User: step-1 build sounds clean; the front-panel needle meters DO work (in and out),
+  the song was just quiet. No meter work needed.
+- Output transfers 12 × 2 ms → 6 × 4 ms (same 24 ms queued; 20 ms left after one
+  completes, was 22). Pacing code already scales with OUT_MS; comments updated.
+- Measured with Brave playing: ~21% → ~19% CPU; 0 restarts / 0 errors over ~1.5 min;
+  no AirPlay loop (fourth coreaudiod restart this boot). Smaller gain than expected:
+  the busy thread is still ~85% kernel time, so per-transfer count isn't the whole
+  story. Next: profile the driver thread (needs root for `sample`), then CLOCK_PKTS 2.
+- Not verified: the user's ears on this build.

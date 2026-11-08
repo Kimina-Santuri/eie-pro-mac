@@ -44,10 +44,11 @@ void eie_trace_dump(const char *path) { FILE *f = fopen(path, "w"); mach_timebas
 #define MIDI_OUT_XFERS 2
 #define MIDI_RING      4096 /* outgoing MIDI bytes waiting for USB (power of two) */
 
-/* 12 x 2 ms = 24 ms of output queued: inside the audio server, completions were
- * sometimes 14 ms late, and with only 15 ms queued the box ran dry and halted. */
-#define OUT_XFERS     12    /* iso out transfers in flight */
-#define OUT_PKTS      16    /* microframes per out transfer = 2 ms */
+/* 6 x 4 ms = 24 ms of output queued: inside the audio server, completions were
+ * sometimes 14 ms late, and with only 15 ms queued the box ran dry and halted.
+ * 4 ms transfers (was 12 x 2 ms) halve the kernel round trips for output. */
+#define OUT_XFERS     6     /* iso out transfers in flight */
+#define OUT_PKTS      32    /* microframes per out transfer = 4 ms */
 #define OUT_MS        (OUT_PKTS / 8)
 #define OUT_MAX_FRAMES (OUT_PKTS * 13)  /* 96 kHz: 12 per microframe, plus slack */
 #ifndef CLOCK_XFERS
@@ -187,7 +188,7 @@ static inline void pack24(unsigned char *p, float v) {
     p[0] = s & 0xff; p[1] = (s >> 8) & 0xff; p[2] = (s >> 16) & 0xff;
 }
 
-/* Decide how many frames the next 5 ms out transfer carries and fill it. */
+/* Decide how many frames the next out transfer (OUT_MS) carries and fill it. */
 static void fill_out(eie_t *e, struct libusb_transfer *t) {
     unsigned nom1000 = e->rate * OUT_MS;       /* frames per transfer, x1000 */
     e->nominal_acc += nom1000;
@@ -196,7 +197,7 @@ static void fill_out(eie_t *e, struct libusb_transfer *t) {
 
     /* The box consumes audio at a perfectly steady rate, and its buffer is small:
      * chunks that swing in size crackle. So send the nominal amount and steer by
-     * at most 2 frames per 5 ms towards the lead measured while settling. */
+     * at most 1 frame per transfer towards the lead measured while settling. */
     int n = nominal;
     if (e->clock_seen) {
         const int settle_n = 200 / OUT_MS;          /* first 200 ms: learn the lead */
@@ -207,7 +208,7 @@ static void fill_out(eie_t *e, struct libusb_transfer *t) {
             double err = (double)(e->credit - e->target);
             e->err_avg += 0.05 * (err - e->err_avg);
             long corr = lround(e->err_avg / 8);
-            if (corr > 1) corr = 1; else if (corr < -1) corr = -1;   /* at most 1 frame per 2 ms */
+            if (corr > 1) corr = 1; else if (corr < -1) corr = -1;   /* at most 1 frame per transfer */
             n = nominal + (int)corr;
         }
         e->credit -= n;
