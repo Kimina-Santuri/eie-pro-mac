@@ -30,6 +30,9 @@ final class DeviceLink: ObservableObject {
     @Published fileprivate(set) var restarts = 0
     @Published fileprivate(set) var levels: [Float] = [-90, -90, -90, -90]      // inputs, dBFS, with a slow fall
     @Published fileprivate(set) var outLevels: [Float] = [-90, -90, -90, -90]   // outputs, same
+    @Published fileprivate(set) var holds: [Float] = [-90, -90, -90, -90]       // input peak hold: 1.5 s, then falls
+    @Published fileprivate(set) var outHolds: [Float] = [-90, -90, -90, -90]
+    private var holdAge = [Int](repeating: 0, count: 8)                        // polls since each hold was set
     @Published fileprivate(set) var midiIn = 0
     @Published fileprivate(set) var midiOut = 0
     @Published var keepAwake = UserDefaults.standard.bool(forKey: "keepAwake") {
@@ -139,6 +142,8 @@ final class DeviceLink: ObservableObject {
         if menuOpen {
             update(\.levels, meter(d["peaks"], levels))
             update(\.outLevels, meter(d["outPeaks"], outLevels))
+            update(\.holds, hold(levels, holds, 0))
+            update(\.outHolds, hold(outLevels, outHolds, 4))
         }
         readMidiIn()   // in case a notification was missed
     }
@@ -148,6 +153,15 @@ final class DeviceLink: ObservableObject {
         guard streaming, let peaks = raw as? [Double], peaks.count == 4 else { return [-90, -90, -90, -90] }
         return (0..<4).map { i in
             max(Float(peaks[i] > 1e-6 ? 20 * log10(peaks[i]) : -90), last[i] - 1.5)
+        }
+    }
+
+    /// Peak hold: stays 1.5 s (22 polls at 15 a second), then falls about 30 dB a second.
+    private func hold(_ lv: [Float], _ last: [Float], _ base: Int) -> [Float] {
+        (0..<4).map { i in
+            if lv[i] >= last[i] { holdAge[base + i] = 0; return lv[i] }
+            holdAge[base + i] += 1
+            return holdAge[base + i] > 22 ? max(lv[i], last[i] - 2) : last[i]
         }
     }
 

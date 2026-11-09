@@ -394,3 +394,48 @@ Facts from the eie-pro-linux README, checked on the user's unit:
   release build. Ideas: find the ~20 ms USB-thread stalls (then 12-16 ms queue, ~40 ms
   round trip); 128-frame input transfers (-2.7 ms, more CPU); "Low latency" switch in the
   app via `eQue`.
+
+## 2026-11-09 (afternoon): 0.1.1 prepared, NOT published; Mac needs a restart
+
+- User verdict on the ~50 ms build: "Latency is good, no clicks or crackles", fine down to
+  a 32-sample buffer in Ableton. Asked for 0.1.1 plus a lighter, modern look.
+- App redesign (`app/Sources/EIEPro/App.swift`, uncommitted): frosted see-through panel
+  (`GlassBackground`: NSVisualEffectView .popover behind-window, alpha 0.78, rounded 16 pt
+  mask; the panel's own effect views lightened to alpha 0.35), slim vertical IN/OUT meters
+  (mint→amber→coral gradient, peak hold 1.5 s then falls, clip dot, dB scale), switch rows,
+  status pill. Peak hold values in `DeviceLink` (`holds`, `outHolds`). `EIEPro --preview`
+  opens the menu contents in a normal window for screenshots (window-only capture shows
+  the blur as flat grey; that's expected).
+- Version bumped to 0.1.1 (app Info.plist, build 2; `make-release.sh` default). A 0.1.1
+  release was built and installed with the package before the rounded-corner change; it
+  must be rebuilt. `pkgbuild` prints 4x "write: Permission denied" under the session
+  sandbox; the package was complete (checked with `pkgutil --expand-full`).
+- **macOS bug hit:** every coreaudiod restart makes `AirPlayXPCHelper` register with
+  coreaudiod twice as often as the last time (1, 2, 4 … ~3000 by 12:47 after ~11 restarts
+  for driver installs). Then coreaudiod spins at 100-150% CPU, new Core Audio clients hang
+  in HALSystem::CheckOutInstance, and every audio app crawls. `killall` and
+  `launchctl kickstart -k system/com.apple.AirPlayXPCHelper` did not restart it (SIP).
+  Only a Mac restart clears it. **Keep coreaudiod restarts few**: batch driver changes,
+  install once; check with
+  `log show --last 5m --predicate 'process == "coreaudiod"' | grep -c AirPlayXPCHelper`.
+- Next session: after the restart, confirm coreaudiod is idle, `package/make-release.sh
+  0.1.1`, install the pkg once, short `ca-glitch`/`ca-latency` check, screenshot the panel,
+  commit, tag v0.1.1, `gh release create`, update the kimina.co.ke Downloads entry.
+
+## 2026-11-09 (after restart): release 0.1.1 published
+
+- Mac restarted; coreaudiod clean (2-3 AirPlayXPCHelper lines in its log, not thousands).
+- `package/make-release.sh 0.1.1` rebuilt with the rounded panel; pkg checked with
+  `pkgutil --expand-full` (app and driver both 0.1.1). The 4x "write: Permission denied"
+  from pkgbuild is still only sandbox noise.
+- Installed once: `installer -pkg` through an admin dialog. The root installer couldn't read
+  the pkg inside ~/Documents ("package path specified was invalid"), so it was copied to
+  /Users/Shared first. Driver loaded (EIE Pro, 4 in, default output), app running,
+  coreaudiod still idle afterwards.
+- Not re-measured: no loopback cable patched (`ca-latency` found no bursts). The driver has
+  no changes since b80a7f1, which the user tested (~50 ms, clean down to 32 samples).
+- Panel screenshot via `EIEPro --preview`: rounded corners and new meters look right.
+- Committed, tagged v0.1.1, GitHub release with `EIE-Pro-0.1.1.zip`; kimina.co.ke Downloads
+  entry updated to 0.1.1.
+- Still open: install on the M2 (Gatekeeper flow), MIDI with cables, Intel, real see-through
+  look checked in the menu bar by the user.

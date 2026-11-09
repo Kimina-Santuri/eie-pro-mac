@@ -1,10 +1,10 @@
 #!/bin/sh
 # Builds a release: universal driver + app, an installer package, and a zip with the
 # installer and "How to install" note. Output: build/release/EIE-Pro-<version>.zip
-# Usage: package/make-release.sh [version]   (default 0.1.0)
+# Usage: package/make-release.sh [version]   (default 0.1.1)
 set -e
 cd "$(dirname "$0")/.."
-VER="${1:-0.1.0}"
+VER="${1:-0.1.1}"
 ROOT="$PWD"
 OUT="$ROOT/build/release"
 rm -rf "$OUT" && mkdir -p "$OUT"
