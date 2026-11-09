@@ -442,6 +442,6 @@ Facts from the eie-pro-linux README, checked on the user's unit:
   look checked in the menu bar by the user.
 - Later: user asked for more transparency ("maybe 45%"): `GlassBackground` alpha 0.78 → 0.55.
   Release zip rebuilt; only the app was swapped in /Applications (admin dialog, since the pkg
-  installs it root-owned), so coreaudiod was not restarted. Tag v0.1.1 still points at
-  01287f9 (glass 0.78); moving it was blocked and needs the user's OK. The rebuilt zip in
-  build/release has the 0.55 glass.
+  installs it root-owned), so coreaudiod was not restarted. With the user's OK, tag v0.1.1
+  moved to cd9b450 and the GitHub release published with the rebuilt zip; releases/latest
+  now points to v0.1.1, so the kimina.co.ke Download button serves it.
