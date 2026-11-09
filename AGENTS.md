@@ -422,7 +422,7 @@ Facts from the eie-pro-linux README, checked on the user's unit:
   0.1.1`, install the pkg once, short `ca-glitch`/`ca-latency` check, screenshot the panel,
   commit, tag v0.1.1, `gh release create`, update the kimina.co.ke Downloads entry.
 
-## 2026-11-09 (after restart): release 0.1.1 published
+## 2026-11-09 (after restart): release 0.1.1 built, installed, tagged
 
 - Mac restarted; coreaudiod clean (2-3 AirPlayXPCHelper lines in its log, not thousands).
 - `package/make-release.sh 0.1.1` rebuilt with the rounded panel; pkg checked with
@@ -435,7 +435,8 @@ Facts from the eie-pro-linux README, checked on the user's unit:
 - Not re-measured: no loopback cable patched (`ca-latency` found no bursts). The driver has
   no changes since b80a7f1, which the user tested (~50 ms, clean down to 32 samples).
 - Panel screenshot via `EIEPro --preview`: rounded corners and new meters look right.
-- Committed, tagged v0.1.1, GitHub release with `EIE-Pro-0.1.1.zip`; kimina.co.ke Downloads
-  entry updated to 0.1.1.
+- Committed (01287f9), tagged and pushed v0.1.1. The GitHub release (`gh release create v0.1.1
+  build/release/EIE-Pro-0.1.1.zip`) is waiting for the user's OK. The kimina.co.ke Downloads
+  entry links to releases/latest, so it needs no change.
 - Still open: install on the M2 (Gatekeeper flow), MIDI with cables, Intel, real see-through
   look checked in the menu bar by the user.

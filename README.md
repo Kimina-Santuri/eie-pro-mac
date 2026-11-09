@@ -50,7 +50,7 @@ Then pick **EIE Pro** in System Settings → Sound, or in your DJ software / DAW
 `./uninstall.sh` removes it. The menu-bar app: `app/build.sh --install`.
 
 A release (universal driver + app, installer, zip with the install note):
-`package/make-release.sh 0.1.0` → `build/release/EIE-Pro-0.1.0.zip`. It builds its own
+`package/make-release.sh 0.1.1` → `build/release/EIE-Pro-0.1.1.zip`. It builds its own
 universal libusb for macOS 12+ (`package/build-libusb.sh`), so Homebrew's isn't used.
 
 ## Test tools
