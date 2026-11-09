@@ -22,6 +22,7 @@
 #include <os/log.h>
 
 #include <atomic>
+#include <algorithm>
 #include <cstring>
 #include <mutex>
 
@@ -34,7 +35,14 @@ constexpr Float64 kRates[] = {44100, 48000, 88200, 96000};
 constexpr UInt32 kChannels = EIE_CHANNELS;
 constexpr UInt32 kRingFrames = 32768;      // power of two, ~340 ms at 96 kHz
 constexpr UInt32 kZeroPeriod = 16384;
-constexpr double kSafetySeconds = 0.032;   // > the engine's output lead (~24 ms)
+// Safety offset = max(output queue, one input transfer) + margin. Output: apps must have
+// written a frame by the time the engine queues it (up to the queue length before it
+// plays). Input: a frame reaches us one 256-frame bulk transfer after it was captured.
+// The margin covers late USB completions inside the audio server.
+constexpr int kDefaultQueueMs = 24;   // 20: glitch burst ~1.4 s after some starts; 16: rare box-level bursts; 8 runs short (2026-11-09)
+constexpr int kDefaultMarginMs = 10;  // input: late bulk completions (one 10.2 ms stall seen in ~20 min)
+constexpr double kOutMarginMs = 4;    // output: late completions only make the engine read later
+constexpr double kInputTransferFrames = 256;
 
 bool IsSupportedRate(Float64 r)
 {
@@ -68,6 +76,8 @@ AudioStreamBasicDescription FloatFormat(Float64 rate)
 // talks to the driver through custom properties on the device:
 constexpr AudioObjectPropertySelector kPropStatus = 'eSta';     // get: dictionary
 constexpr AudioObjectPropertySelector kPropKeepAwake = 'eKpA';  // get/set: number 0 or 1
+constexpr AudioObjectPropertySelector kPropQueue = 'eQue';      // get/set: output queue ms (2-24)
+constexpr AudioObjectPropertySelector kPropMargin = 'eMar';     // get/set: input safety margin ms (1-32)
 constexpr AudioObjectPropertySelector kPropMidiIn = 'eMIn';     // get: data, drains; notified on arrival
 constexpr AudioObjectPropertySelector kPropMidiOut = 'eMOu';    // set: data, raw MIDI bytes
 
@@ -189,6 +199,8 @@ public:
     bool ioRunning = false;             // under controlMutex: Core Audio wants I/O
     bool streaming = false;             // under controlMutex: the box is actually streaming
     bool keepAwake = false;             // under controlMutex: the app asked to keep streaming
+    std::atomic<int> queueMs{kDefaultQueueMs};    // output queue for the next engine start
+    std::atomic<int> marginMs{kDefaultMarginMs};
     std::atomic<float> peak[kChannels] = {};      // input peaks since the app last read them
     std::atomic<float> outPeak[kChannels] = {};   // output peaks: the mix actually sent to the box
     std::vector<std::shared_ptr<EieStream>> eieStreams;
@@ -199,9 +211,65 @@ public:
     eie_render_fn render = nullptr;
     eie_capture_fn capture = nullptr;
 
-    UInt32 GetSafetyOffset() const override
+    // Published safety offsets (frames). Changed only inside a HAL configuration change
+    // (ApplyRate, or ApplyTiming's request) so the HAL re-reads them.
+    std::atomic<UInt32> safetyOut{0}, safetyIn{0};
+
+    // Underrun counters since the engine started: the HAL reading input frames the engine
+    // hasn't captured yet, and the engine sending output frames apps haven't written yet.
+    std::atomic<long long> inWrittenEnd{-1}, outWrittenEnd{-1};
+    std::atomic<long> inLate{0}, inLateMax{0}, outLate{0}, outLateMax{0};
+    static void NoteLate(std::atomic<long>& count, std::atomic<long>& worst, long frames)
     {
-        return UInt32(GetNominalSampleRate() * kSafetySeconds);
+        count.fetch_add(1, std::memory_order_relaxed);
+        if (frames > worst.load(std::memory_order_relaxed)) worst.store(frames, std::memory_order_relaxed);
+    }
+
+    // Output: apps must have written a frame by the time the engine queues it, up to the
+    // queue length before it plays; a late completion only makes the engine read later,
+    // so a small fixed margin covers the HAL's own timing. Input: a frame reaches us one
+    // 256-frame bulk transfer after it was captured, later still if the completion is
+    // late, so input gets the adjustable margin (measured with tools/ca-glitch).
+    void RecomputeSafety(Float64 rate)
+    {
+        safetyOut = UInt32(rate * (queueMs.load() + kOutMarginMs) / 1000.0);
+        safetyIn = UInt32(kInputTransferFrames + rate * marginMs.load() / 1000.0);
+    }
+
+    UInt32 GetSafetyOffset() const override { return safetyOut.load(); }
+
+    OSStatus GetPropertyData(AudioObjectID objectID, pid_t clientPID, const AudioObjectPropertyAddress* address,
+        UInt32 qualifierDataSize, const void* qualifierData, UInt32 inDataSize, UInt32* outDataSize,
+        void* outData) const override
+    {
+        if (address && address->mSelector == kAudioDevicePropertySafetyOffset
+            && address->mScope == kAudioObjectPropertyScopeInput) {
+            if (inDataSize < sizeof(UInt32) || !outData) return kAudioHardwareBadPropertySizeError;
+            *static_cast<UInt32*>(outData) = safetyIn.load();
+            if (outDataSize) *outDataSize = sizeof(UInt32);
+            return kAudioHardwareNoError;
+        }
+        return aspl::Device::GetPropertyData(objectID, clientPID, address, qualifierDataSize, qualifierData,
+            inDataSize, outDataSize, outData);
+    }
+
+    // A queue or margin change: restart a streaming engine with the new queue, then ask
+    // the HAL for a configuration change that publishes the new safety offsets.
+    void ApplyTiming()
+    {
+        {
+            std::lock_guard<std::mutex> lock(controlMutex);
+            if (streaming) {
+                if (eie_t* e = engine.load()) eie_stop(e);
+                streaming = false;
+                StartWithRecoveryLocked();
+            }
+        }
+        RequestConfigurationChange([this]() {
+            RecomputeSafety(GetNominalSampleRate());
+            os_log(Log(), "output queue %d ms, input margin %d ms, safety offset out %u / in %u frames",
+                queueMs.load(), marginMs.load(), safetyOut.load(), safetyIn.load());
+        });
     }
 
     // Start the engine at the current rate. Caller holds controlMutex.
@@ -211,7 +279,10 @@ public:
         if (!e) return -1;
         std::memset(outRing, 0, sizeof outRing);
         std::memset(inRing, 0, sizeof inRing);
+        inWrittenEnd = -1; outWrittenEnd = -1;
+        inLate = 0; inLateMax = 0; outLate = 0; outLateMax = 0;
         startHostTime = mach_absolute_time();
+        eie_set_queue_ms(e, queueMs.load());
         int r = eie_start(e, UInt32(GetNominalSampleRate()), render, capture, this);
         streaming = (r == 0);
         return r;
@@ -257,6 +328,7 @@ public:
     {
         if (!IsSupportedRate(rate)) return kAudioDeviceUnsupportedFormatError;
         aspl::Device::SetNominalSampleRateImpl(rate);
+        RecomputeSafety(rate);
         for (auto& s : eieStreams) s->ApplyRate(rate);
         std::lock_guard<std::mutex> lock(controlMutex);
         if (ioRunning) {
@@ -382,6 +454,8 @@ public:
         float* dst = static_cast<float*>(bytes);
         const UInt32 frames = bytesCount / (4 * kChannels);
         long long pos = (long long)timestamp;
+        const long long have = dev_->inWrittenEnd.load(std::memory_order_acquire);
+        if (have >= 0 && pos + frames > have) EieDevice::NoteLate(dev_->inLate, dev_->inLateMax, long(pos + frames - have));
         for (UInt32 i = 0; i < frames; i++, pos++) {
             const float* src = &dev_->inRing[(pos & (kRingFrames - 1)) * kChannels];
             for (UInt32 c = 0; c < kChannels; c++) dst[i * kChannels + c] = src[c];
@@ -398,6 +472,7 @@ public:
             float* dst = &dev_->outRing[(pos & (kRingFrames - 1)) * kChannels];
             for (UInt32 c = 0; c < kChannels; c++) dst[c] = src[i * kChannels + c];
         }
+        if (pos > dev_->outWrittenEnd.load(std::memory_order_relaxed)) dev_->outWrittenEnd.store(pos, std::memory_order_release);
     }
 
 public:
@@ -407,6 +482,11 @@ public:
     {
         auto* d = static_cast<EieDevice*>(ctx);
         float pk[kChannels] = {};
+        {
+            const long long have = d->outWrittenEnd.load(std::memory_order_acquire);
+            if (have >= 0 && pos + n > have && pos < have + kRingFrames / 2)   // an app is writing, but not far enough yet
+                EieDevice::NoteLate(d->outLate, d->outLateMax, long(pos + n - have));
+        }
         for (int i = 0; i < n; i++, pos++) {
             float* src = &d->outRing[(pos & (kRingFrames - 1)) * kChannels];
             for (UInt32 c = 0; c < kChannels; c++) {
@@ -434,6 +514,7 @@ public:
                 if (v > pk[c]) pk[c] = v;
             }
         }
+        d->inWrittenEnd.store(pos, std::memory_order_release);
         for (UInt32 c = 0; c < kChannels; c++)
             if (pk[c] > d->peak[c].load(std::memory_order_relaxed)) d->peak[c].store(pk[c], std::memory_order_relaxed);
     }
@@ -649,11 +730,12 @@ std::shared_ptr<aspl::Driver> CreateDriver()
     params.ModelUID = "co.ke.kimina.eie-pro.model";
     params.SampleRate = kDefaultRate;
     params.ChannelCount = kChannels;
-    params.SafetyOffset = UInt32(kDefaultRate * kSafetySeconds);   // GetSafetyOffset() scales it with the rate
+    params.SafetyOffset = UInt32(kDefaultRate * (kDefaultQueueMs + kDefaultMarginMs) / 1000);   // GetSafetyOffset() computes the live value
     params.ZeroTimeStampPeriod = kZeroPeriod;
     params.EnableMixing = true;
 
     auto device = std::make_shared<EieDevice>(context, params);
+    device->RecomputeSafety(kDefaultRate);
 
     std::vector<AudioValueRange> rates;
     std::vector<AudioStreamRangedDescription> formats;
@@ -695,6 +777,9 @@ std::shared_ptr<aspl::Driver> CreateDriver()
         CFDictionarySetValue(d, CFSTR("streaming"), dev->streaming ? kCFBooleanTrue : kCFBooleanFalse);
         CFDictionarySetValue(d, CFSTR("keepAwake"), dev->keepAwake ? kCFBooleanTrue : kCFBooleanFalse);
         num(CFSTR("rate"), dev->GetNominalSampleRate());
+        num(CFSTR("queueMs"), dev->queueMs.load());
+        num(CFSTR("marginMs"), dev->marginMs.load());
+        num(CFSTR("safetyOffset"), dev->GetSafetyOffset());
         if (e) {
             CFStringRef fw = CFStringCreateWithCString(nullptr, eie_firmware(e), kCFStringEncodingUTF8);
             CFDictionarySetValue(d, CFSTR("firmware"), fw);
@@ -703,6 +788,12 @@ std::shared_ptr<aspl::Driver> CreateDriver()
             eie_get_stats(e, &st);
             num(CFSTR("restarts"), st.restarts);
             num(CFSTR("errors"), st.errors);
+            num(CFSTR("inLate"), dev->inLate.load());
+            num(CFSTR("inLateMax"), dev->inLateMax.load());
+            num(CFSTR("outLate"), dev->outLate.load());
+            num(CFSTR("outLateMax"), dev->outLateMax.load());
+            num(CFSTR("leadMax"), st.lead_max);
+            num(CFSTR("leadMin"), st.lead_min);
         }
         auto peaks = [&](CFStringRef key, std::atomic<float>* src) {
             CFMutableArrayRef a = CFArrayCreateMutable(nullptr, kChannels, &kCFTypeArrayCallBacks);
@@ -740,6 +831,26 @@ std::shared_ptr<aspl::Driver> CreateDriver()
             }
             os_log(Log(), "keep awake %{public}s", dev->keepAwake ? "on" : "off");
         });
+
+    auto intProp = [dev](AudioObjectPropertySelector sel, std::atomic<int>* field, int lo, int hi, const char* what) {
+        dev->RegisterCustomProperty(sel,
+            [field]() -> CFPropertyListRef {
+                int v = field->load();
+                return CFNumberCreate(nullptr, kCFNumberIntType, &v);
+            },
+            [dev, field, lo, hi, what](CFPropertyListRef v) {
+                int x = 0;
+                if (!v || CFGetTypeID(v) != CFNumberGetTypeID()) return;
+                CFNumberGetValue((CFNumberRef)v, kCFNumberIntType, &x);
+                x = std::min(std::max(x, lo), hi);
+                if (x == field->load()) return;
+                field->store(x);
+                os_log(Log(), "%{public}s set to %d", what, x);
+                dev->ApplyTiming();
+            });
+    };
+    intProp(kPropQueue, &dev->queueMs, 2, 24, "output queue ms");
+    intProp(kPropMargin, &dev->marginMs, 1, 32, "input safety margin ms");
 
     device->RegisterCustomProperty(kPropMidiIn, []() -> CFPropertyListRef { return TheLink().TakeMidiIn(); });
     device->RegisterCustomProperty(kPropMidiOut,

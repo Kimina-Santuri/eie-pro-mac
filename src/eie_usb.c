@@ -47,10 +47,11 @@ void eie_trace_dump(const char *path) { FILE *f = fopen(path, "w"); mach_timebas
 /* 6 x 4 ms = 24 ms of output queued: inside the audio server, completions were
  * sometimes 14 ms late, and with only 15 ms queued the box ran dry and halted.
  * 4 ms transfers (was 12 x 2 ms) halve the kernel round trips for output. */
-#define OUT_XFERS     6     /* iso out transfers in flight */
-#define OUT_PKTS      32    /* microframes per out transfer = 4 ms */
-#define OUT_MS        (OUT_PKTS / 8)
+#define OUT_XFERS     6     /* most iso out transfers in flight */
+#define OUT_PKTS      32    /* most microframes per out transfer = 4 ms */
 #define OUT_MAX_FRAMES (OUT_PKTS * 13)  /* 96 kHz: 12 per microframe, plus slack */
+/* The queue actually used is set with eie_set_queue_ms() (default 24 ms = 6 x 4 ms)
+ * and applied at the next start: e->out_n transfers of e->out_pkts microframes. */
 #ifndef CLOCK_XFERS
 #define CLOCK_XFERS   16
 #endif
@@ -75,6 +76,7 @@ struct eie {
     char firmware[8];
 
     unsigned rate;
+    int queue_ms, out_n, out_pkts;   /* output queue: wanted ms; transfers x microframes in use */
     eie_render_fn render;
     eie_capture_fn capture;
     void *user;
@@ -122,6 +124,7 @@ struct eie {
     int dll_on; double dll_t, dll_tpf, nominal_tpf;
     atomic_uint ts_seq; long long ts_frames; double ts_host, ts_tpf; unsigned ts_seed;
 
+    _Atomic long st_lead_max, st_lead_min;   /* frames read from the ring ahead of the box clock (after settling) */
     _Atomic long st_clock_frames, st_clock_packets, st_out_frames, st_in_frames, st_errors, st_restarts;
 };
 
@@ -135,6 +138,7 @@ static int ctrl(eie_t *e, uint8_t type, uint8_t req, uint16_t val, uint16_t idx,
 eie_t *eie_open(char *err, size_t errlen) {
     eie_t *e = calloc(1, sizeof *e);
     if (!e) { snprintf(err, errlen, "out of memory"); return NULL; }
+    e->queue_ms = 24;
     int r = libusb_init(&e->ctx);
     if (r) { snprintf(err, errlen, "libusb_init: %s", libusb_error_name(r)); free(e); return NULL; }
     e->h = libusb_open_device_with_vid_pid(e->ctx, 0x09e8, 0x0010);
@@ -188,9 +192,10 @@ static inline void pack24(unsigned char *p, float v) {
     p[0] = s & 0xff; p[1] = (s >> 8) & 0xff; p[2] = (s >> 16) & 0xff;
 }
 
-/* Decide how many frames the next out transfer (OUT_MS) carries and fill it. */
+/* Decide how many frames the next out transfer (out_pkts microframes) carries and fill it. */
 static void fill_out(eie_t *e, struct libusb_transfer *t) {
-    unsigned nom1000 = e->rate * OUT_MS;       /* frames per transfer, x1000 */
+    const int pkts = e->out_pkts;
+    unsigned nom1000 = e->rate * pkts / 8;     /* frames per transfer, x1000 */
     e->nominal_acc += nom1000;
     int nominal = e->nominal_acc / 1000;
     e->nominal_acc -= nominal * 1000;
@@ -200,7 +205,7 @@ static void fill_out(eie_t *e, struct libusb_transfer *t) {
      * at most 1 frame per transfer towards the lead measured while settling. */
     int n = nominal;
     if (e->clock_seen) {
-        const int settle_n = 200 / OUT_MS;          /* first 200 ms: learn the lead */
+        const int settle_n = 200 * 8 / pkts;        /* first 200 ms: learn the lead */
         if (e->settle < settle_n) {
             e->settle_sum += e->credit;
             if (++e->settle == settle_n) e->target = e->settle_sum / settle_n;
@@ -220,6 +225,13 @@ static void fill_out(eie_t *e, struct libusb_transfer *t) {
     if (e->render) e->render(e->user, f, n, e->s_total);
     else memset(f, 0, sizeof(float) * n * EIE_CHANNELS);
     e->s_total += n;
+    if (e->clock_seen && e->settle >= 200 * 8 / pkts) {
+        /* the last frame just read plays when c_total reaches it: this is how long before
+         * playing the engine reads the ring, which the output safety offset must cover */
+        long lead = (long)(e->s_total - e->c_total);
+        if (lead > atomic_load(&e->st_lead_max)) atomic_store(&e->st_lead_max, lead);
+        if (lead < atomic_load(&e->st_lead_min)) atomic_store(&e->st_lead_min, lead);
+    }
     const float up = 50.f / e->rate, down = 100.f / e->rate;
     int fading = atomic_load(&e->fading_out);
     for (int i = 0; i < n; i++) {
@@ -233,8 +245,9 @@ static void fill_out(eie_t *e, struct libusb_transfer *t) {
     for (int i = 0; i < n * EIE_CHANNELS; i++, p += 3) pack24(p, f[i]);
 
     int have = 0;
-    for (int i = 0; i < OUT_PKTS; i++) {
-        int upto = n * (i + 1) / OUT_PKTS;
+    t->num_iso_packets = pkts;
+    for (int i = 0; i < pkts; i++) {
+        int upto = n * (i + 1) / pkts;
         t->iso_packet_desc[i].length = (upto - have) * 12;
         have = upto;
     }
@@ -519,6 +532,21 @@ static void free_transfers(eie_t *e) {
     for (int i = 0; i < MIDI_OUT_XFERS; i++) { libusb_free_transfer(e->mout[i]); free(e->moutbuf[i]); e->mout[i] = 0; e->moutbuf[i] = 0; e->mout_busy[i] = 0; }
 }
 
+/* Output queue of about `ms` as transfers x microframes: 4 ms transfers down to 16 ms,
+ * then 2 ms, then 1 ms, keeping 2 to 6 in flight. */
+static void queue_shape(int ms, int *n, int *pkts) {
+    if (ms < 2) ms = 2;
+    if (ms > OUT_XFERS * OUT_PKTS / 8) ms = OUT_XFERS * OUT_PKTS / 8;
+    *pkts = ms >= 16 ? 32 : ms >= 8 ? 16 : 8;
+    *n = ms * 8 / *pkts;
+    if (*n < 2) *n = 2;
+    if (*n > OUT_XFERS) *n = OUT_XFERS;
+}
+
+void eie_set_queue_ms(eie_t *e, int ms) { e->queue_ms = ms; }
+
+int eie_queue_ms(const eie_t *e) { int n, p; queue_shape(e->queue_ms, &n, &p); return n * p / 8; }
+
 /* Reset pacing and submit every transfer. Returns 0 or the first libusb error. */
 static int submit_all(eie_t *e) {
     e->credit = 0; e->clock_seen = 0; e->nominal_acc = 0;
@@ -531,12 +559,14 @@ static int submit_all(eie_t *e) {
      * starts its converters together, so counting frames gives the same alignment on
      * every start. (Anchoring on the first input packet's arrival varied by ~1 ms.) */
     e->in_pos = e->c_total;
+    atomic_store(&e->st_lead_max, 0); atomic_store(&e->st_lead_min, 1L << 30);
     e->dll_on = 0;
     atomic_fetch_add(&e->ts_seq, 1); e->ts_host = 0; e->ts_seed++; atomic_fetch_add(&e->ts_seq, 1);
-    for (int i = 0; i < OUT_XFERS; i++) fill_out(e, e->out[i]);
+    queue_shape(e->queue_ms, &e->out_n, &e->out_pkts);
+    for (int i = 0; i < e->out_n; i++) fill_out(e, e->out[i]);
     struct libusb_transfer *all[CLOCK_XFERS + OUT_XFERS + IN_XFERS + MIDI_IN_XFERS]; int n = 0;
     for (int i = 0; i < CLOCK_XFERS; i++) all[n++] = e->clk[i];
-    for (int i = 0; i < OUT_XFERS; i++) all[n++] = e->out[i];
+    for (int i = 0; i < e->out_n; i++) all[n++] = e->out[i];
     for (int i = 0; i < IN_XFERS; i++) all[n++] = e->in[i];
     for (int i = 0; i < MIDI_IN_XFERS; i++) all[n++] = e->min[i];
     for (int i = 0; i < MIDI_OUT_XFERS; i++) e->mout_busy[i] = 0;
@@ -628,4 +658,6 @@ void eie_get_stats(const eie_t *e, eie_stats_t *s) {
     s->in_frames = atomic_load(&e->st_in_frames);
     s->errors = atomic_load(&e->st_errors);
     s->restarts = atomic_load(&e->st_restarts);
+    s->lead_max = atomic_load(&e->st_lead_max);
+    s->lead_min = atomic_load(&e->st_lead_min);
 }

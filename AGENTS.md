@@ -361,3 +361,36 @@ Facts from the eie-pro-linux README, checked on the user's unit:
   (local build links Homebrew libusb; release script builds its own).
 - Install from Claude: root can't read ~/Documents (TCC), so stage the bundle in /tmp
   first, then `osascript ... with administrator privileges` (sudo via `!` can't prompt).
+
+## 2026-11-09 (later): round trip cut from 76-90 ms to ~50 ms
+
+- Safety offsets were 32 ms each way. Now per scope (`EieDevice::GetPropertyData` answers
+  the input scope; libASPL has one value): output = queue + 4 ms, input = 256 frames
+  (one bulk transfer) + input margin (default 10 ms). Published inside a HAL
+  configuration change (`RequestConfigurationChange`): just overriding GetSafetyOffset
+  and notifying left clients on the old cached value.
+- Output queue is runtime (`eie_set_queue_ms`, 2-24 ms, default 24 = 6 x 4 ms; shorter
+  shapes use 2 ms / 1 ms transfers). Custom properties `eQue` (queue ms) and `eMar` (input
+  margin ms); status dict adds queueMs, marginMs, leadMax/leadMin (frames the engine reads
+  ahead of the box clock), inLate/outLate (+Max) underrun counters. Not persisted: the
+  driver defaults apply after every audio-server restart; the app doesn't set them yet.
+- Tools: `tools/ca-glitch.c` (60 s 997 Hz loopback, sine-prediction residual catches
+  clicks; `GLITCH_SELFTEST=1` fakes a 10-frame dropout at 5 s, caught), `tools/ca-timing.c`
+  (show/set queue and margin, verifies via the status dict). Settings sent while a test's
+  IO is stopping were sometimes dropped silently: leave a second between runs.
+- Measured (48 kHz, loopback, idle Mac + all 10 cores loaded): engine lead = queue +0-2 ms.
+  8 ms: box runs short. 12 ms: clean in 7 runs (edge). 16 ms: one box-level burst (driver
+  counters 0) in ~13 runs. 20 ms: steady clean, but a burst ~1.3-1.5 s after 2 of 4 starts
+  (driver counters 0; not explained). 24 ms: clean at start and steady. Input margin 2-4 ms
+  glitched (USB callbacks up to 6-10 ms late); 8 had one failure after a 10.2 ms stall.
+- Final (24 ms / 10 ms): 4 fresh starts and 60 s runs at 44.1, 48 (x2), 96 (x3) clean
+  except one test-side overload at 96k/128 and one box stall + watchdog restart at
+  96k/256 (USB thread stalled ~20 ms: clock gap 21.9 ms, out gap 19.4 ms; pre-existing,
+  the reason for the 24 ms queue). Round trip with buffer 128: 51 ms at 44.1, 50 at 48,
+  44 at 96; reported latency within 5 frames.
+- Install from Claude: stage the bundle in the scratchpad, then `osascript ... with
+  administrator privileges` (root can't read ~/Documents; `!` sudo can't prompt).
+- Not verified: soft synth / monitoring feel in Ableton at buffer 128 (user next); Intel;
+  release build. Ideas: find the ~20 ms USB-thread stalls (then 12-16 ms queue, ~40 ms
+  round trip); 128-frame input transfers (-2.7 ms, more CPU); "Low latency" switch in the
+  app via `eQue`.

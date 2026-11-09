@@ -62,6 +62,18 @@ cc -o build/ca-tone tools/ca-tone.c -framework AudioToolbox -framework CoreAudio
 ./build/ca-tone 5 -30 440 48000        # quiet tone through the installed driver
 ```
 
+Latency and dropout tests need a cable from output 1 into input 1 (input gain low):
+
+```sh
+F="-framework CoreAudio -framework CoreFoundation"
+cc -O2 -o build/ca-latency tools/ca-latency.c $F
+cc -O2 -o build/ca-glitch  tools/ca-glitch.c  $F
+cc -O2 -o build/ca-timing  tools/ca-timing.c  $F
+./build/ca-latency 48000 128   # round trip, and how far off the reported latency is
+./build/ca-glitch 60 48000     # 60 s steady tone: counts clicks, dropouts, underruns
+./build/ca-timing              # output queue and safety margins; ca-timing 20 10 changes them
+```
+
 Logs: `log stream --predicate 'subsystem == "co.ke.kimina.eie-pro"'`
 
 ## Known limits
@@ -71,6 +83,10 @@ Logs: `log stream --predicate 'subsystem == "co.ke.kimina.eie-pro"'`
   macOS asks you to allow it once in Privacy & Security.
 - Intel Macs: built for, not tested.
 - A small tick when the box starts streaming.
+- Latency: about 50 ms round trip in a DAW at 44.1/48 kHz with a 128-sample buffer
+  (44 ms at 96 kHz); recordings land on the grid (reported latency within 5 samples).
+  The output queue stays at 24 ms because the USB thread inside the audio server
+  sometimes stalls for ~20 ms; shorter queues click after some starts or now and then.
 - MIDI: ports "EIE Pro MIDI In / Out" come from the menu-bar app; not yet tested with
   cables.
 - The driver uses about 20% of one CPU core while audio plays (USB traffic every
@@ -88,7 +104,7 @@ implementation.
 
 [akai-eie-pro-mac](https://github.com/ewan-m/akai-eie-pro-mac) by ewan-m (GPL-2, started
 May 2026) is an earlier, independent driver for the same box, built as a DriverKit system
-extension. It handles latency reporting and buffer sizes carefully. Until it has Apple's
+extension. It has selectable IO buffer sizes. Until it has Apple's
 DriverKit entitlements, installing it means lowering the Mac's security in Recovery mode;
 this project installs with a normal `.pkg` instead. The two share no code.
 

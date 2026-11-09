@@ -44,6 +44,7 @@ typedef struct {
     long in_frames;      /* frames we received */
     long errors;         /* failed transfers while running */
     long restarts;       /* times the watchdog restarted a stalled box */
+    long lead_max, lead_min; /* frames the engine reads ahead of the box clock since (re)start */
 } eie_stats_t;
 
 /* Raw MIDI bytes received from the MIDI IN socket (USB thread). */
@@ -60,6 +61,12 @@ const char *eie_firmware(const eie_t *e);
 int eie_start(eie_t *e, unsigned rate, eie_render_fn render, eie_capture_fn capture, void *ctx);
 
 void eie_stop(eie_t *e);
+
+/* Output queue length in ms (2-24, default 24), used from the next start. Shorter means
+ * lower latency but less room for late USB completions. eie_queue_ms: the length
+ * actually used (rounded to whole transfers). */
+void eie_set_queue_ms(eie_t *e, int ms);
+int eie_queue_ms(const eie_t *e);
 void eie_close(eie_t *e);
 void eie_get_stats(const eie_t *e, eie_stats_t *s);
 /* Safe from any thread, including real-time ones. Returns 1 if a reading was taken. */
