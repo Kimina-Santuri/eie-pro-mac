@@ -118,7 +118,7 @@ struct eie {
      * eie_start (kept across watchdog restarts); frame number s_total is the next one
      * sent and plays when c_total reaches it; in_pos numbers input frames on the same
      * timeline. A delay-locked loop turns clock packets into smooth host times. */
-    long long c_total, s_total, in_pos; int in_pos_set;
+    long long c_total, s_total, in_pos;
     int dll_on; double dll_t, dll_tpf, nominal_tpf;
     atomic_uint ts_seq; long long ts_frames; double ts_host, ts_tpf; unsigned ts_seed;
 
@@ -339,6 +339,7 @@ static void in_cb(struct libusb_transfer *t) {
         if (e->skip_in > 0) {   /* the first frames after a start can hold a full-scale click */
             int drop = e->skip_in < frames ? (int)e->skip_in : frames;
             e->skip_in -= drop; frames -= drop; a += drop * IN_FRAME_BYTES;
+            e->in_pos += drop;  /* dropped frames still take their place on the timeline */
         }
         float *f = e->capture_buf;
         for (int k = 0; k < frames; k++, a += IN_FRAME_BYTES) {
@@ -355,7 +356,6 @@ static void in_cb(struct libusb_transfer *t) {
             f[k * 4 + 2] = (int32_t)(c2 << 8) * s;
             f[k * 4 + 3] = (int32_t)(c3 << 8) * s;
         }
-        if (frames && !e->in_pos_set) { e->in_pos = e->c_total - frames; e->in_pos_set = 1; }
         if (frames && e->capture) e->capture(e->user, f, frames, e->in_pos);
         e->in_pos += frames;
         TRACE('i', t->actual_length, frames, 0, 0);
@@ -527,7 +527,10 @@ static int submit_all(eie_t *e) {
     e->mute_left = e->rate / 4; e->gain = 0.f;
     e->s_total = e->c_total;     /* the box's buffer starts empty */
     e->last_clk = 0; e->last_out = 0;
-    e->in_pos_set = 0;
+    /* Input frame k after a (re)start was captured at box frame c_total + k: the box
+     * starts its converters together, so counting frames gives the same alignment on
+     * every start. (Anchoring on the first input packet's arrival varied by ~1 ms.) */
+    e->in_pos = e->c_total;
     e->dll_on = 0;
     atomic_fetch_add(&e->ts_seq, 1); e->ts_host = 0; e->ts_seed++; atomic_fetch_add(&e->ts_seq, 1);
     for (int i = 0; i < OUT_XFERS; i++) fill_out(e, e->out[i]);

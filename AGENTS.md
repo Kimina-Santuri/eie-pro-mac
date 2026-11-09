@@ -337,3 +337,27 @@ Facts from the eie-pro-linux README, checked on the user's unit:
 - **Next (user's choice, 2026-11-09): measure round-trip latency** in Ableton (output
   looped into an input, check recorded alignment / Driver Error Compensation), then report
   correct device/stream latency and safety offsets per rate if it's off.
+
+## 2026-11-09: round-trip latency measured; start alignment fixed; latency reported
+
+- New `tools/ca-latency.c` (`build/ca-latency [rate] [buffer] [out_ch] [in_ch] [level_dB]`;
+  build: `clang -O2 -o build/ca-latency tools/ca-latency.c -framework CoreAudio -framework CoreFoundation`).
+  Needs a cable from output N to input N (input gain low). One IOProc plays 8 windowed
+  noise bursts, cross-correlates the input on the device's sample timeline, prints the
+  hardware path, the part the driver doesn't report, and the round trip an app sees.
+- Before: driver reported 0 latency; hardware path varied per engine start (48 kHz: 80,
+  88 or 128 frames). Cause: `in_pos` was anchored to `c_total` when the first input
+  bulk transfer arrived, which depends on clock-packet / callback order (~1 ms steps).
+- Fix (`src/eie_usb.c`): input frame k after a (re)start is numbered `c_total + k`, set in
+  `submit_all`; frames dropped by `skip_in` still advance `in_pos`. Now two clusters
+  8 frames apart (one 512 B input packet): 64/72 at 44.1/48 kHz, ~74/~82 at 88.2/96.
+- Driver (`EieStream::GetLatency`): 34 frames each way at 44.1/48, 39 at 88.2/96
+  (round trip 68 / 78). Verified with ca-latency: error +2 frames at 48k, -3 at 96k.
+- Still big: safety offsets 32 ms each way, so an app's round trip is ~76-90 ms. Next:
+  shrink the engine's 24 ms output lead and the safety offsets (test for crackles).
+- Ableton (user, 2026-11-09): recorded loopback clicks sit on the grid, ~0.001 s from the
+  source; Driver Error Compensation not needed.
+- Not verified: Intel; release build
+  (local build links Homebrew libusb; release script builds its own).
+- Install from Claude: root can't read ~/Documents (TCC), so stage the bundle in /tmp
+  first, then `osascript ... with administrator privileges` (sudo via `!` can't prompt).

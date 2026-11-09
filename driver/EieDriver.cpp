@@ -163,6 +163,9 @@ public:
         aspl::Stream::SetVirtualFormatImpl(FloatFormat(rate));
     }
 
+    // Converter + USB delay the timestamps don't cover, per direction (frames).
+    UInt32 GetLatency() const override;
+
 protected:
     OSStatus SetPhysicalFormatImpl(const AudioStreamBasicDescription& format) override;
     OSStatus SetVirtualFormatImpl(const AudioStreamBasicDescription& format) override;
@@ -290,6 +293,18 @@ protected:
         return kAudioHardwareNoError;
     }
 };
+
+// Round trip beyond the timestamps, measured with tools/ca-latency through a loopback
+// cable (2026-11-09): 64 or 72 frames at 44.1/48 kHz, ~74 or ~82 at 88.2/96 kHz,
+// depending on where the box starts its input (it moves in 8-frame USB packets).
+// Report the middle, split evenly between output and input.
+UInt32 EieStream::GetLatency() const
+{
+    auto d = device_.lock();
+    const Float64 rate = d ? d->GetNominalSampleRate() : kDefaultRate;
+    const UInt32 roundTrip = rate > 50000 ? 78 : 68;
+    return roundTrip / 2;
+}
 
 EieStream::EieStream(std::shared_ptr<const aspl::Context> context, std::shared_ptr<EieDevice> device,
     const aspl::StreamParameters& params)
