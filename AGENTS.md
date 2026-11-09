@@ -440,3 +440,8 @@ Facts from the eie-pro-linux README, checked on the user's unit:
   entry links to releases/latest, so it needs no change.
 - Still open: install on the M2 (Gatekeeper flow), MIDI with cables, Intel, real see-through
   look checked in the menu bar by the user.
+- Later: user asked for more transparency ("maybe 45%"): `GlassBackground` alpha 0.78 → 0.55.
+  Release zip rebuilt; only the app was swapped in /Applications (admin dialog, since the pkg
+  installs it root-owned), so coreaudiod was not restarted. Tag v0.1.1 still points at
+  01287f9 (glass 0.78); moving it was blocked and needs the user's OK. The rebuilt zip in
+  build/release has the 0.55 glass.

@@ -243,7 +243,7 @@ struct GlassBackground: NSViewRepresentable {
         v.material = .popover          // follows light / dark mode
         v.blendingMode = .behindWindow
         v.state = .active
-        v.alphaValue = 0.78            // clearly see-through, text still readable
+        v.alphaValue = 0.55            // 45% see-through (user, 2026-11-09)
         v.maskImage = Self.roundedMask(radius: Self.radius)
         return v
     }
